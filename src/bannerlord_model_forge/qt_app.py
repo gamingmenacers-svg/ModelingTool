@@ -39,8 +39,10 @@ from PySide6.QtWidgets import (
 from .blender_backend import detect_blender
 from .config import BONE_REGION_PATTERNS, PRESETS, project_root
 from .game_install import inspect_game_install
+from .gpu_viewport import RigViewport
 from .mesh_io import load_mesh
 from .pipeline import run_pipeline
+from .preview_import import load_preview_mesh
 from .sample import create_sample
 
 
@@ -181,7 +183,7 @@ class DropCard(QFrame):
         self.path_label.setToolTip(str(path))
 
 
-class RigViewport(QWidget):
+class LegacyRigViewport(QWidget):
     bone_options_changed = Signal(list, bool)
     statistics_changed = Signal(dict)
 
@@ -471,6 +473,7 @@ class RigViewport(QWidget):
 class AppSignals(QObject):
     log = Signal(str)
     preview_ready = Signal(object)
+    preview_failed = Signal(str)
     finished = Signal(object)
     failed = Signal(str)
 
@@ -487,6 +490,7 @@ class ForgeStudio(QMainWindow):
         self.signals = AppSignals()
         self.signals.log.connect(self._log)
         self.signals.preview_ready.connect(self._show_source_preview)
+        self.signals.preview_failed.connect(self._preview_failed)
         self.signals.finished.connect(self._pipeline_finished)
         self.signals.failed.connect(self._pipeline_failed)
         self.game = inspect_game_install()
@@ -643,6 +647,7 @@ class ForgeStudio(QMainWindow):
         self.viewport = RigViewport()
         self.viewport.bone_options_changed.connect(self._set_bones)
         self.viewport.statistics_changed.connect(self._set_statistics)
+        self.viewport.render_error.connect(lambda message: self._log(f"GPU viewport error: {message}"))
         middle.addWidget(self.viewport)
         console_frame = QFrame()
         console_layout = QVBoxLayout(console_frame)
@@ -855,23 +860,28 @@ class ForgeStudio(QMainWindow):
         self.workflow_labels[0].setStyleSheet("color:#6ed6a5;")
         self.job_label.setText("LOADING PREVIEW")
         self._log(f"Importing preview: {path.name}")
-        if path.suffix.lower() == ".fbx":
-            self._log("FBX preview will use the isolated Blender conversion path during analysis.")
-            self.job_label.setText("READY TO ANALYZE")
-            return
         threading.Thread(target=self._preview_worker, args=(path,), daemon=True).start()
 
     def _preview_worker(self, path: Path) -> None:
         try:
-            mesh, _ = load_mesh(path)
+            if path.suffix.lower() == ".fbx":
+                self.signals.log.emit("Converting FBX read-only through Blender for immediate viewport display…")
+            mesh, converted = load_preview_mesh(path, project_root() / "work" / "preview-cache")
+            if path.suffix.lower() == ".fbx":
+                self.signals.log.emit(f"FBX preview ready: {converted.name}")
             self.signals.preview_ready.emit((mesh, path.name))
         except Exception as exc:
-            self.signals.log.emit(f"Preview unavailable: {exc}")
+            self.signals.preview_failed.emit(f"Could not display {path.name}: {exc}")
 
     def _show_source_preview(self, payload: object) -> None:
         mesh, name = payload  # type: ignore[misc]
         self.viewport.set_model(mesh, label=name)
         self.job_label.setText("READY TO ANALYZE")
+
+    def _preview_failed(self, message: str) -> None:
+        self.job_label.setText("IMPORT FAILED")
+        self._log("ERROR: " + message)
+        QMessageBox.critical(self, "Model import failed", message)
 
     def _preset_changed(self) -> None:
         preset = PRESETS[self.piece_combo.currentData()]

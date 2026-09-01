@@ -50,6 +50,12 @@ try {
         --paths (Join-Path $ProjectRoot 'src') `
         --hidden-import fast_simplification `
         --hidden-import networkx `
+        --exclude-module pytest `
+        --exclude-module _pytest `
+        --exclude-module pytest_cov `
+        --exclude-module coverage `
+        --exclude-module pygments `
+        --exclude-module tkinterdnd2 `
         --add-binary "$(Join-Path $QtRuntimeRoot 'VCRUNTIME140.dll');." `
         --add-binary "$(Join-Path $QtRuntimeRoot 'VCRUNTIME140_1.dll');." `
         --add-binary "$(Join-Path $QtRuntimeRoot 'MSVCP140.dll');." `

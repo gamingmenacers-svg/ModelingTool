@@ -44,7 +44,7 @@ The right-hand studio tabs expose the triangle budget, optional armour reference
 
 ## Rigging Studio
 
-The centre of the app is a large interactive fitting viewport, with assets and workflow on the left and Bannerlord-specific rig, inspection, and validation panels on the right:
+The centre of the app is a hardware-accelerated OpenGL fitting viewport, with assets and workflow on the left and Bannerlord-specific rig, inspection, and validation panels on the right. FBX files are converted read-only through the installed Blender bridge as soon as they are selected and are displayed automatically when conversion completes:
 
 - drag with the left mouse button to orbit;
 - use the mouse wheel to zoom;
@@ -56,7 +56,7 @@ The centre of the app is a large interactive fitting viewport, with assets and w
 
 The app uses Bannerlord's locally installed human skeleton read-only. It generates visual overlay data and renders, but never copies or redistributes the FBX itself.
 
-The stage uses an original checker/matte floor and cool-key, cool-rim, warm-fill studio lighting informed by the Modding Kit's readable character-preview scene definitions. It does not redistribute TaleWorlds scene or character assets.
+The stage uses smooth vertex normals, a depth buffer, multisample antialiasing, an original checker/matte floor, and cool-key, cool-rim, warm-fill studio lighting informed by the Modding Kit's readable character-preview scene definitions. It does not redistribute TaleWorlds scene or character assets.
 
 Rigging has three deliberately distinct confidence tiers:
 
@@ -160,7 +160,7 @@ TaleWorlds' importer is the final authority. See [docs/RESEARCH.md](docs/RESEARC
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Tests cover deterministic mesh processing, non-destructive source handling, LOD/output generation, skeleton validation, armour weight transfer, and rigid/one-bone weapon paths.
+Tests cover deterministic mesh processing, non-destructive source handling, cached preview import, LOD/output generation, skeleton validation, armour weight transfer, and rigid/one-bone weapon paths. Set `BMF_RUN_BLENDER_TESTS=1` to include a generated FBX export/import round-trip and the skinned-FBX integration path.
 
 ## Current limitations
 

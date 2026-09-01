@@ -5,9 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from bannerlord_model_forge.blender_backend import detect_blender
+from bannerlord_model_forge.blender_backend import convert_with_blender, detect_blender
 from bannerlord_model_forge.mesh_io import load_mesh
 from bannerlord_model_forge.pipeline import run_pipeline
+from bannerlord_model_forge.preview_import import load_preview_mesh
 from bannerlord_model_forge.sample import create_sample
 
 
@@ -63,3 +64,22 @@ def test_skinned_fbx_export_with_generated_legal_rig(tmp_path: Path) -> None:
     assert result.artifacts["bannerlord_skinned_fbx"].is_file()
     assert result.artifacts["skeleton_overlay"].is_file()
     assert result.artifacts["skeleton_viewport_data"].is_file()
+
+
+@pytest.mark.skipif(
+    os.environ.get("BMF_RUN_BLENDER_TESTS") != "1",
+    reason="set BMF_RUN_BLENDER_TESTS=1 to run the installed-Blender integration test",
+)
+def test_generated_fbx_imports_into_immediate_preview(tmp_path: Path) -> None:
+    blender = detect_blender()
+    if not blender.found:
+        pytest.skip("Blender is not installed")
+    source = create_sample(tmp_path / "source.glb")
+    fbx = convert_with_blender(source, tmp_path / "source.fbx")
+
+    mesh, preview_path = load_preview_mesh(fbx, tmp_path / "preview-cache")
+
+    assert preview_path.is_file()
+    assert preview_path.suffix == ".glb"
+    assert len(mesh.vertices) > 0
+    assert len(mesh.faces) > 0
