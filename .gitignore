@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Models and generated results can be large or contain user-owned work.
+output/
+outputs/
+work/
+*.fbx
+*.glb
+*.gltf
+*.obj
+*.mtl
+*.blend
+*.png
+
+# Local configuration and editor noise.
+.env
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
