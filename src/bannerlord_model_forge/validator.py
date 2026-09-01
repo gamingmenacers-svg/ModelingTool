@@ -58,6 +58,12 @@ def validate_mesh(
         else:
             items.append(_item("weapon_origin", "warning", "Weapon origin", f"Bounds centre is {offset:.4f} model units from world origin. Review pivot/grip placement; crafting pieces should be centred at origin."))
         items.append(_item("weapon_collision", "warning", "Weapon collision/body", "Visual geometry does not define safe combat collision by itself. Select or author the correct body/physics material in your module workflow."))
+    elif preset.key == "shield":
+        items.append(_item("shield_origin", "warning", "Shield grip/origin", "Confirm the shield grip, hand attachment, holster frame, and blocking orientation against the target item setup."))
+        items.append(_item("shield_collision", "warning", "Shield collision/body", "The visual mesh is not a validated shield collision body; author and test the correct physics shape and material."))
+    if preset.rig_mode == "cloth":
+        items.append(_item("cloth", "warning", "Cloth setup required", "Weight transfer handles the skinned base only. Cloth vertex alpha, simulation mesh, collision capsules, and material settings still require Modding Kit tests."))
+    items.append(_item("piece_guidance", "info", f"{preset.label} pose focus", preset.guidance))
     if lod_triangles and all(a > b for a, b in zip([stats.triangles] + lod_triangles, lod_triangles)):
         items.append(_item("lods", "pass", "LOD sequence", "LOD triangle counts decrease and names use Bannerlord's .lodN convention."))
     else:
@@ -67,7 +73,7 @@ def validate_mesh(
     items.append(_item("clipping", "info", "Clipping risk", "Static geometry checks cannot prove clearance during animation. Test crouch, mount, combat, and extreme body shapes in the Modding Kit."))
     export_detail = (
         "The staged GLB/OBJ files are review intermediates. Export FBX and finish body, item/crafting XML, and attack/holster tests in the Bannerlord Modding Kit."
-        if preset.key == "weapon"
+        if preset.rig_mode == "rigid"
         else "The staged GLB/OBJ files are review intermediates. A skinned FBX and Bannerlord Modding Kit import are still required for in-game use."
     )
     items.append(_item("export", "warning", "Bannerlord import step required", export_detail))

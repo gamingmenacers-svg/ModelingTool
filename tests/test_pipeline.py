@@ -14,7 +14,13 @@ def test_end_to_end_is_non_destructive_and_generates_lods(tmp_path: Path) -> Non
     source = create_sample(tmp_path / "source.glb")
     source_hash = digest(source)
 
-    result = run_pipeline(source, "body", triangle_target=1800, output_root=tmp_path / "output")
+    result = run_pipeline(
+        source,
+        "body",
+        triangle_target=1800,
+        output_root=tmp_path / "output",
+        enable_skeleton_preview=False,
+    )
 
     assert digest(source) == source_hash
     assert result.before.triangles > result.after.triangles
@@ -39,6 +45,7 @@ def test_weapon_pipeline_emits_rigid_setup(tmp_path: Path) -> None:
         triangle_target=1200,
         output_root=tmp_path / "output",
         enable_blender_export=False,
+        enable_skeleton_preview=False,
     )
     assert result.rigging.status == "rigid_asset_no_skinning"
     assert result.artifacts["rigging_metadata"].name == "weapon_setup.json"

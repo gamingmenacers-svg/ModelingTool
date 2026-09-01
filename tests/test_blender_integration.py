@@ -61,3 +61,5 @@ def test_skinned_fbx_export_with_generated_legal_rig(tmp_path: Path) -> None:
     )
     assert result.rigging.status == "weights_transferred"
     assert result.artifacts["bannerlord_skinned_fbx"].is_file()
+    assert result.artifacts["skeleton_overlay"].is_file()
+    assert result.artifacts["skeleton_viewport_data"].is_file()

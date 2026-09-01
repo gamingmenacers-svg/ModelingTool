@@ -17,6 +17,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--output", required=True)
     parser.add_argument("--skeleton")
     parser.add_argument("--weights")
+    parser.add_argument("--bannerlord-unit-scale", action="store_true")
     return parser.parse_args(args)
 
 
@@ -46,6 +47,10 @@ def main() -> None:
         armatures = [obj for obj in bpy.context.scene.objects if obj.type == "ARMATURE"]
         if not armatures:
             raise ValueError("No armature was found in the supplied skeleton FBX.")
+        if opts.bannerlord_unit_scale:
+            for armature_object in armatures:
+                armature_object.scale = tuple(value * 100.0 for value in armature_object.scale)
+            bpy.context.view_layer.update()
         mesh_object = imported_meshes[0]
         armature = armatures[0]
         weight_data = json.loads(Path(opts.weights).read_text(encoding="utf-8"))

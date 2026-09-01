@@ -9,9 +9,9 @@ The application is non-destructive. It reads the selected model and an allowlist
 ## MVP user journey
 
 1. Drop an OBJ, GLB/GLTF, FBX, PLY, or STL file, or use the generated training model.
-2. Choose Helmet, Body armour/clothing, Gloves, Boots, or Weapon. Advanced controls stay hidden.
+2. Choose Helmet, Body armour/clothing, Pauldrons, Gloves/bracers, Cape, Skirt/tassets, Boots/greaves, Shield, or Weapon. Advanced controls stay hidden.
 3. Select **Analyze and prepare**.
-4. Review before/after statistics, two preview images, LODs, a machine-readable JSON report, and a plain-English Markdown report.
+4. Orbit and zoom the model in the Rig Inspector, toggle its Bannerlord skeleton and wireframe, inspect piece-relevant bones and weight heatmaps, then review before/after statistics, images, LODs, JSON, and the plain-English report.
 5. If armour has no licensed weighted reference, receive an explicit reference-required result instead of invented weights. If the asset is an ordinary weapon, receive a rigid-item setup record; one-bone skinning is an explicit exceptional option.
 6. Complete FBX/material/physics/item configuration and animation tests through the Bannerlord Modding Kit.
 
@@ -24,14 +24,14 @@ The application is non-destructive. It reads the selected model and an allowlist
 - Optimization: quadric-error simplification to a configurable policy target.
 - LODs: decreasing configurable ratios and Bannerlord `.lodN` names.
 - Quality report: deterministic sampled geometric deviation, normal change estimate, and low/moderate/high visible-loss classification.
-- Armour rigging: transfer a legally usable close-fitting reference weight field, cap and normalize influences, and expose distance-derived confidence. Skeleton placement/export remains a backend boundary.
+- Armour rigging: prefer a legally usable close-fitting reference weight field; otherwise create explicitly provisional, piece-filtered bone-proximity weights against the locally installed skeleton. Cap/normalize influences, expose heatmaps and distance-derived confidence, and export a clearly named provisional skinned FBX for visual tests.
 - Weapon preparation: default to Bannerlord's rigid item/crafting workflow; validate scale and centered origin. Optionally emit a one-bone weight map only when the user names a target bone for an exceptional skinned weapon.
 - Output: GLB review bundle, OBJ base/LOD files, preview PNGs, rigging/setup JSON, validation Markdown/JSON, rigid weapon FBX when Blender is available, and skinned FBX when a matching legal skeleton and weight reference are supplied.
 
 ## Explicit non-goals for the MVP
 
 - No extraction, decompilation, copying, or redistribution of proprietary game assets.
-- No claim that an arbitrary generated humanoid garment can be auto-rigged reliably.
+- No claim that provisional geometric weights make an arbitrary generated garment production-ready.
 - No automatic install into a Bannerlord module.
 - No TPAC writing. TaleWorlds' supported Modding Kit remains the authoritative compiler/importer.
 - No automatic material recreation, collision authoring, cloth simulation, item XML balancing, or animation acceptance testing.

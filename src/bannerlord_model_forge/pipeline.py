@@ -8,15 +8,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from .blender_backend import convert_with_blender, detect_blender, export_skinned_fbx
-from .config import PRESETS, default_output_root
+from .blender_backend import (
+    convert_with_blender,
+    detect_blender,
+    export_skinned_fbx,
+    render_skeleton_overlay,
+)
+from .config import BONE_REGION_PATTERNS, PRESETS, default_output_root
 from .game_install import inspect_game_install
 from .mesh_io import export_lod_scene, export_mesh, load_mesh, mesh_stats
-from .models import PipelineResult
+from .models import PipelineResult, ValidationItem
 from .optimizer import clean_mesh, make_lods, quality_metrics, simplify_mesh
 from .preview import render_preview
 from .report import write_reports
-from .rigging.base import RiggingRequest
+from .rigging.base import ManualRiggingBackend, RiggingRequest
+from .rigging.proximity import SkeletonProximityRiggingBackend
 from .rigging.reference_transfer import ReferenceWeightTransferBackend
 from .rigging.weapon import WeaponRiggingBackend
 from .validator import validate_mesh, validate_skeleton_manifest, validate_weight_rows
@@ -47,6 +53,7 @@ def run_pipeline(
     weapon_bone: str | None = None,
     weapon_skeleton: Path | None = None,
     enable_blender_export: bool = True,
+    enable_skeleton_preview: bool = True,
     progress: Progress | None = None,
 ) -> PipelineResult:
     say = progress or (lambda _message: None)
@@ -106,47 +113,110 @@ def run_pipeline(
     artifacts["preview_before"] = job_dir / "preview_before.png"
     artifacts["preview_after"] = job_dir / "preview_after.png"
 
+    blender_status = detect_blender()
+    game_info = inspect_game_install()
+    reference_data: dict[str, object] = {}
+    if reference_manifest and reference_manifest.is_file():
+        reference_data = json.loads(reference_manifest.read_text(encoding="utf-8"))
+    configured_skeleton: object = reference_data.get("skeleton_fbx")
+    resolved_reference_skeleton: Path | None = None
+    if configured_skeleton:
+        resolved_reference_skeleton = Path(str(configured_skeleton)).expanduser()
+        if not resolved_reference_skeleton.is_absolute():
+            resolved_reference_skeleton = (reference_manifest.parent / resolved_reference_skeleton).resolve()
+
+    preview_skeleton: Path | None = None
+    preview_kind = "alignment_guide"
+    preview_bannerlord_unit_scale = False
+    if preset.rig_mode == "rigid":
+        if weapon_skeleton and weapon_skeleton.is_file():
+            preview_skeleton = weapon_skeleton
+            preview_kind = "supplied_rigid_rig"
+    elif resolved_reference_skeleton and resolved_reference_skeleton.is_file():
+        preview_skeleton = resolved_reference_skeleton
+        preview_kind = "weighted_reference_rig"
+    elif game_info.human_skeleton_path:
+        candidate = Path(game_info.human_skeleton_path)
+        if candidate.is_file():
+            preview_skeleton = candidate
+            preview_bannerlord_unit_scale = True
+
+    if enable_skeleton_preview and blender_status.found and preview_skeleton:
+        say("Rendering the model with its skeleton alignment overlay...")
+        try:
+            overlay_png, overlay_json = render_skeleton_overlay(
+                glb_path,
+                preview_skeleton,
+                job_dir / "skeleton_overlay.png",
+                bannerlord_unit_scale=preview_bannerlord_unit_scale,
+            )
+            artifacts["skeleton_overlay"] = overlay_png
+            artifacts["skeleton_viewport_data"] = overlay_json
+        except Exception as exc:
+            say(f"Skeleton visual preview was unavailable: {exc}")
+
     rig_request = RiggingRequest(
         prepared,
         job_dir / "rigging",
         reference_manifest=reference_manifest,
         rigid_bone=weapon_bone,
+        asset_kind=preset.key,
     )
-    rigging = (
-        WeaponRiggingBackend().rig(rig_request)
-        if preset.key == "weapon"
-        else ReferenceWeightTransferBackend().rig(rig_request)
-    )
+    if preset.rig_mode == "rigid":
+        rigging = WeaponRiggingBackend().rig(rig_request)
+    elif reference_manifest and reference_manifest.is_file():
+        rigging = ReferenceWeightTransferBackend().rig(rig_request)
+    elif "skeleton_viewport_data" in artifacts:
+        patterns = BONE_REGION_PATTERNS.get(preset.skeleton_region, ())
+        rigging = SkeletonProximityRiggingBackend(
+            artifacts["skeleton_viewport_data"], patterns
+        ).rig(rig_request)
+    else:
+        rigging = ManualRiggingBackend().rig(rig_request)
     if rigging.weights_path:
         artifacts["skin_weights"] = rigging.weights_path
     if rigging.metadata_path:
         artifacts["rigging_metadata"] = rigging.metadata_path
-    blender_status = detect_blender()
-    if preset.key == "weapon" and blender_status.found and enable_blender_export:
-        weapon_fbx = geometry_dir / f"{asset_name}.fbx"
+
+    if preset.rig_mode == "rigid" and blender_status.found and enable_blender_export:
+        rigid_fbx = geometry_dir / f"{asset_name}.fbx"
         if rigging.status == "rigid_asset_no_skinning":
-            convert_with_blender(glb_path, weapon_fbx)
-            artifacts["bannerlord_fbx"] = weapon_fbx
+            convert_with_blender(glb_path, rigid_fbx)
+            artifacts["bannerlord_fbx"] = rigid_fbx
         elif rigging.weights_path and weapon_skeleton and weapon_skeleton.is_file():
-            export_skinned_fbx(glb_path, weapon_skeleton, rigging.weights_path, weapon_fbx)
-            artifacts["bannerlord_skinned_fbx"] = weapon_fbx
+            export_skinned_fbx(glb_path, weapon_skeleton, rigging.weights_path, rigid_fbx)
+            artifacts["bannerlord_skinned_fbx"] = rigid_fbx
         elif rigging.status == "rigid_weights_generated":
             rigging.warnings.append("A one-bone weight map was generated, but no valid weapon skeleton FBX was supplied, so a skinned FBX was not exported.")
     elif rigging.weights_path and reference_manifest and blender_status.found and enable_blender_export:
-        reference_data = json.loads(reference_manifest.read_text(encoding="utf-8"))
-        configured_skeleton = reference_data.get("skeleton_fbx")
-        if configured_skeleton:
-            skeleton_path = Path(configured_skeleton).expanduser()
-            if not skeleton_path.is_absolute():
-                skeleton_path = (reference_manifest.parent / skeleton_path).resolve()
-            if skeleton_path.is_file():
+        if resolved_reference_skeleton:
+            if resolved_reference_skeleton.is_file():
                 skinned_fbx = geometry_dir / f"{asset_name}_skinned.fbx"
-                export_skinned_fbx(glb_path, skeleton_path, rigging.weights_path, skinned_fbx)
+                export_skinned_fbx(glb_path, resolved_reference_skeleton, rigging.weights_path, skinned_fbx)
                 artifacts["bannerlord_skinned_fbx"] = skinned_fbx
             else:
                 rigging.warnings.append("The reference manifest's skeleton_fbx path does not exist; no skinned FBX was exported.")
         else:
             rigging.warnings.append("Weights were transferred, but the reference manifest has no skeleton_fbx path; no skinned FBX was exported.")
+    if (
+        rigging.status == "provisional_auto_weights"
+        and rigging.weights_path
+        and preview_skeleton
+        and blender_status.found
+        and enable_blender_export
+    ):
+        provisional_fbx = geometry_dir / f"{asset_name}_provisional_skinned.fbx"
+        try:
+            export_skinned_fbx(
+                glb_path,
+                preview_skeleton,
+                rigging.weights_path,
+                provisional_fbx,
+                bannerlord_unit_scale=preview_bannerlord_unit_scale,
+            )
+            artifacts["bannerlord_provisional_skinned_fbx"] = provisional_fbx
+        except Exception as exc:
+            rigging.warnings.append(f"Provisional skinned FBX could not be exported: {exc}")
     validation = validate_mesh(
         after,
         replace(preset, triangle_target=target),
@@ -164,8 +234,18 @@ def run_pipeline(
                 int(weight_payload.get("max_influences", 4)),
             )
         )
+    if "skeleton_overlay" in artifacts:
+        validation.append(
+            ValidationItem(
+                "skeleton_visual",
+                "info",
+                "Skeleton visual inspection",
+                f"A {preview_kind.replace('_', ' ')} overlay was generated. It reveals scale/orientation/bone placement, but does not by itself prove deformation quality.",
+            )
+        )
     result = PipelineResult(
         source=source,
+        preset_key=preset.key,
         output_dir=job_dir,
         before=before,
         after=after,
@@ -176,7 +256,7 @@ def run_pipeline(
         artifacts=artifacts,
     )
     report_md, report_json = write_reports(
-        result, inspect_game_install(), blender_status, _sha256(source)
+        result, game_info, blender_status, _sha256(source)
     )
     artifacts["report_markdown"] = report_md
     artifacts["report_json"] = report_json

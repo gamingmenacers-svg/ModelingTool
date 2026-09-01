@@ -9,6 +9,7 @@ from bannerlord_model_forge.rigging.reference_transfer import (
     ReferenceWeightTransferBackend,
     normalize_and_limit,
 )
+from bannerlord_model_forge.rigging.proximity import SkeletonProximityRiggingBackend
 from bannerlord_model_forge.rigging.weapon import WeaponRiggingBackend
 
 
@@ -59,3 +60,26 @@ def test_weapon_default_is_rigid_and_optional_bone_is_one_weight(tmp_path: Path)
     payload = json.loads(skinned.weights_path.read_text(encoding="utf-8"))
     assert payload["max_influences"] == 1
     assert all(row == {"weapon_0": 1.0} for row in payload["weights"])
+
+
+def test_piece_specific_proximity_weights_are_provisional_and_normalized(tmp_path: Path) -> None:
+    mesh = trimesh.creation.box(extents=(0.4, 0.2, 0.8))
+    skeleton_data = tmp_path / "skeleton.json"
+    skeleton_data.write_text(
+        json.dumps(
+            {
+                "bones": [
+                    {"name": "bip01_pelvis_0", "head": [0, 0, -0.5], "tail": [0, 0, 0]},
+                    {"name": "bip01_spine_1", "head": [0, 0, 0], "tail": [0, 0, 0.8]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = SkeletonProximityRiggingBackend(skeleton_data, ("spine",)).rig(
+        RiggingRequest(mesh, tmp_path / "out", asset_kind="body")
+    )
+    payload = json.loads(result.weights_path.read_text(encoding="utf-8"))
+    assert result.status == "provisional_auto_weights"
+    assert payload["focused_bones"] == ["bip01_spine_1"]
+    assert all(abs(sum(row.values()) - 1.0) < 1e-7 for row in payload["weights"])

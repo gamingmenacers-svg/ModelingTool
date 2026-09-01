@@ -12,9 +12,11 @@ class WeaponRiggingBackend(RiggingBackend):
     def rig(self, request: RiggingRequest) -> RiggingResult:
         request.output_dir.mkdir(parents=True, exist_ok=True)
         center = ((request.mesh.bounds[0] + request.mesh.bounds[1]) / 2.0).tolist()
-        setup_path = request.output_dir / "weapon_setup.json"
+        rigid_kind = "shield" if request.asset_kind == "shield" else "weapon"
+        setup_path = request.output_dir / f"{rigid_kind}_setup.json"
         setup = {
             "schema": 1,
+            "asset_kind": rigid_kind,
             "mode": "one_bone_skin" if request.rigid_bone else "rigid_item",
             "dimensions_model_units": request.mesh.extents.tolist(),
             "bounds_center_model_units": center,
@@ -32,7 +34,7 @@ class WeaponRiggingBackend(RiggingBackend):
                 confidence=0.85,
                 method="bannerlord_rigid_item",
                 warnings=[
-                    "Ordinary Bannerlord weapons are rigid meshes configured and attached by the item/crafting workflow; humanoid deformation weights are normally inappropriate.",
+                    f"Ordinary Bannerlord {rigid_kind}s are rigid meshes configured and attached by the item workflow; humanoid deformation weights are normally inappropriate.",
                     "Grip/origin, holster alignment, physics body, and attacks must still be tested in the Modding Kit.",
                 ],
                 metadata_path=setup_path,
@@ -51,7 +53,7 @@ class WeaponRiggingBackend(RiggingBackend):
             confidence=0.9,
             method="rigid_one_bone",
             warnings=[
-                "Use this exceptional one-bone bind only when your chosen weapon template actually expects a skinned/animated mesh.",
+                f"Use this exceptional one-bone bind only when your chosen {rigid_kind} template actually expects a skinned/animated mesh.",
                 "The bone name came from the user; compatibility cannot be proven without the target skeleton and an animation test.",
             ],
             weights_path=weights_path,

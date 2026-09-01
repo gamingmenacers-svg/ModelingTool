@@ -16,6 +16,7 @@ class RiggingRequest:
     reference_manifest: Path | None = None
     max_influences: int = 4
     rigid_bone: str | None = None
+    asset_kind: str = "body"
 
 
 class RiggingBackend(ABC):

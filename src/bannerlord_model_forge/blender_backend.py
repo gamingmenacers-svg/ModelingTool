@@ -68,6 +68,7 @@ def export_skinned_fbx(
     skeleton_fbx: Path,
     weights_json: Path,
     destination: Path,
+    bannerlord_unit_scale: bool = False,
 ) -> Path:
     status = detect_blender()
     if not status.found or not status.executable:
@@ -90,8 +91,47 @@ def export_skinned_fbx(
         "--output",
         str(destination.resolve()),
     ]
+    if bannerlord_unit_scale:
+        command.append("--bannerlord-unit-scale")
     completed = subprocess.run(command, capture_output=True, text=True, timeout=600, check=False)
     if completed.returncode != 0 or not destination.is_file():
         detail = (completed.stderr or completed.stdout)[-4000:]
         raise RuntimeError(f"Blender skinned export failed: {detail.strip()}")
     return destination
+
+
+def render_skeleton_overlay(
+    source: Path,
+    skeleton_fbx: Path,
+    destination: Path,
+    bannerlord_unit_scale: bool = False,
+) -> tuple[Path, Path]:
+    status = detect_blender()
+    if not status.found or not status.executable:
+        raise RuntimeError(status.note)
+    renderer = Path(__file__).with_name("blender_skeleton_preview.py")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        status.executable,
+        "--background",
+        "--factory-startup",
+        "--python",
+        str(renderer),
+        "--",
+        "--input",
+        str(source.resolve()),
+        "--skeleton",
+        str(skeleton_fbx.resolve()),
+        "--output",
+        str(destination.resolve()),
+    ]
+    if bannerlord_unit_scale:
+        command.append("--bannerlord-unit-scale")
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=600, check=False)
+    if completed.returncode != 0 or not destination.is_file():
+        detail = (completed.stderr or completed.stdout)[-4000:]
+        raise RuntimeError(f"Blender skeleton preview failed: {detail.strip()}")
+    data_path = destination.with_suffix(".json")
+    if not data_path.is_file():
+        raise RuntimeError("Blender rendered the skeleton preview but did not write its viewport data.")
+    return destination, data_path

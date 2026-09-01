@@ -2,7 +2,7 @@
 
 ## Chosen stack
 
-The MVP uses Python 3.11+, Tk/TkDND for the Windows desktop UI, `trimesh`/NumPy for geometry, `fast-simplification` for quadric decimation, and Pillow for dependency-light previews. Core processing is UI-independent and available from `bmf`, which makes it deterministic and testable.
+The MVP uses Python 3.11+, Tk/TkDND for the Windows desktop UI, `trimesh`/NumPy for geometry, `fast-simplification` for quadric decimation, and Pillow for preview and an interactive software-rendered Rig Inspector. Core processing is UI-independent and available from `bmf`, which makes it deterministic and testable.
 
 ## Why Blender remains optional but important
 
@@ -24,6 +24,8 @@ The Blender bridge converts FBX to GLB in an isolated output job. Native formats
 ## Rigging interface
 
 `RiggingBackend` isolates rigging policy from import/optimization. The first concrete armour backend transfers normalized weights from a user-supplied/licensed, aligned reference surface via deterministic nearest-vertex matching. Confidence falls with the 95th-percentile reference distance. It does not hallucinate skeleton transforms.
+
+When no weighted template exists, a separate low-confidence backend filters the official skeleton to the selected piece's anatomical region and assigns normalized weights by distance to bone segments. It is visually inspectable, capped at provisional confidence, and never mislabeled as reference-transferred output.
 
 The weapon backend defaults to a rigid Bannerlord item record. An explicit one-bone weight map exists only for exceptional animated/skinned weapon templates. Both paths force Modding Kit testing.
 

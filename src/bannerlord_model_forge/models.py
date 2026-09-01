@@ -69,6 +69,7 @@ class RiggingResult:
 @dataclass
 class PipelineResult:
     source: Path
+    preset_key: str
     output_dir: Path
     before: MeshStats
     after: MeshStats

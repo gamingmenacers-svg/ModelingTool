@@ -21,6 +21,7 @@ def write_reports(
         "schema": 1,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "source": {"path": str(result.source), "sha256": source_sha256, "modified": False},
+        "preset": result.preset_key,
         "game_install": game.to_dict(),
         "blender": blender.to_dict(),
         "before": result.before.to_dict(),

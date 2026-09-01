@@ -11,6 +11,7 @@ The project code is MIT licensed. Runtime dependencies are installed from PyPI i
 | NetworkX | Connected-component graph operations used by mesh repair | BSD-3-Clause |
 | tkinterdnd2 / TkDND | Desktop drag-and-drop integration | MIT / BSD-style |
 | pytest, pytest-cov | Development tests only | MIT |
+| PyInstaller | Builds the portable Windows executable | GPL-2.0-or-later with bootloader exception |
 
 Optional external tools:
 
