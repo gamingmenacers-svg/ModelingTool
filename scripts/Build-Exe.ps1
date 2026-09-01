@@ -10,6 +10,7 @@ $Executable = Join-Path $DistRoot 'Bannerlord Model Forge.exe'
 $EntryPoint = Join-Path $ProjectRoot 'src\bannerlord_model_forge\exe_entry.py'
 $BlenderBridge = Join-Path $ProjectRoot 'src\bannerlord_model_forge\blender_bridge.py'
 $SkeletonPreview = Join-Path $ProjectRoot 'src\bannerlord_model_forge\blender_skeleton_preview.py'
+$QtRuntimeRoot = Join-Path $ProjectRoot '.venv\Lib\site-packages\PySide6'
 
 if (-not (Test-Path -LiteralPath $VenvPython)) {
     & (Join-Path $PSScriptRoot 'Setup.ps1')
@@ -34,24 +35,38 @@ if (Test-Path -LiteralPath $Executable) {
 }
 
 Write-Host 'Building the portable Windows executable...'
-& $VenvPython -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --onefile `
-    --windowed `
-    --noupx `
-    --name 'Bannerlord Model Forge' `
-    --paths (Join-Path $ProjectRoot 'src') `
-    --collect-all tkinterdnd2 `
-    --hidden-import fast_simplification `
-    --hidden-import networkx `
-    --add-data "$BlenderBridge;bannerlord_model_forge" `
-    --add-data "$SkeletonPreview;bannerlord_model_forge" `
-    --distpath $DistRoot `
-    --workpath (Join-Path $BuildRoot 'build') `
-    --specpath $BuildRoot `
-    $EntryPoint
-if ($LASTEXITCODE -ne 0) { throw 'Executable build failed.' }
+$OriginalPath = $env:Path
+# Some development hosts put a private Poppler ICU build on PATH. Qt expects the
+# Windows ICU shim; letting PyInstaller pick Poppler's same-named DLL breaks QtCore.
+$env:Path = (($OriginalPath -split ';') | Where-Object { $_ -and $_ -notmatch '\\poppler\\Library\\bin$' }) -join ';'
+try {
+    & $VenvPython -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --onefile `
+        --windowed `
+        --noupx `
+        --name 'Bannerlord Model Forge' `
+        --paths (Join-Path $ProjectRoot 'src') `
+        --hidden-import fast_simplification `
+        --hidden-import networkx `
+        --add-binary "$(Join-Path $QtRuntimeRoot 'VCRUNTIME140.dll');." `
+        --add-binary "$(Join-Path $QtRuntimeRoot 'VCRUNTIME140_1.dll');." `
+        --add-binary "$(Join-Path $QtRuntimeRoot 'MSVCP140.dll');." `
+        --add-binary "$(Join-Path $QtRuntimeRoot 'MSVCP140_1.dll');." `
+        --add-binary "$(Join-Path $QtRuntimeRoot 'MSVCP140_2.dll');." `
+        --add-data "$BlenderBridge;bannerlord_model_forge" `
+        --add-data "$SkeletonPreview;bannerlord_model_forge" `
+        --distpath $DistRoot `
+        --workpath (Join-Path $BuildRoot 'build') `
+        --specpath $BuildRoot `
+        $EntryPoint
+    $BuildExitCode = $LASTEXITCODE
+}
+finally {
+    $env:Path = $OriginalPath
+}
+if ($BuildExitCode -ne 0) { throw 'Executable build failed.' }
 
 Write-Host ''
 Write-Host "Built: $Executable" -ForegroundColor Green

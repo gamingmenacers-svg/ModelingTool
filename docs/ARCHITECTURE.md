@@ -2,7 +2,9 @@
 
 ## Chosen stack
 
-The MVP uses Python 3.11+, Tk/TkDND for the Windows desktop UI, `trimesh`/NumPy for geometry, `fast-simplification` for quadric decimation, and Pillow for preview and an interactive software-rendered Rig Inspector. Core processing is UI-independent and available from `bmf`, which makes it deterministic and testable.
+The workstation uses Python 3.11+, PySide6/Qt for the Windows studio UI, `trimesh`/NumPy for geometry, `fast-simplification` for quadric decimation, and a Qt-painted interactive Rig Inspector. Core processing is UI-independent and available from `bmf`, which makes it deterministic and testable.
+
+The studio stage follows conventions visible in the installed Modding Kit's accessible `character_developer_scene` and `inventory_character_scene` definitions: a grounded matte floor, camera-instance framing, cool key/rim lighting, warm fill, and complete equipped-character context. No packaged TaleWorlds mesh, texture, scene, or code is copied into the application.
 
 ## Why Blender remains optional but important
 

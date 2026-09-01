@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-from bannerlord_model_forge.app import main
+from bannerlord_model_forge.qt_app import main
 
 
 def packaged_self_test(output_root: Path) -> int:

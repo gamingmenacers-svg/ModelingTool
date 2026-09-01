@@ -9,7 +9,7 @@ The project code is MIT licensed. Runtime dependencies are installed from PyPI i
 | trimesh | Mesh import, inspection, export, and geometry operations | MIT |
 | fast-simplification | Quadric-error mesh simplification | MIT |
 | NetworkX | Connected-component graph operations used by mesh repair | BSD-3-Clause |
-| tkinterdnd2 / TkDND | Desktop drag-and-drop integration | MIT / BSD-style |
+| PySide6 / Qt | Modern Windows studio interface, drag-and-drop, panels, and viewport | LGPL-3.0-only / GPL-3.0-only / commercial |
 | pytest, pytest-cov | Development tests only | MIT |
 | PyInstaller | Builds the portable Windows executable | GPL-2.0-or-later with bootloader exception |
 

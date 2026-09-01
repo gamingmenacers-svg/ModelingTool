@@ -1,6 +1,6 @@
 # Bannerlord Model Forge
 
-Bannerlord Model Forge is a focused Windows armour workstation for Mount & Blade II: Bannerlord. It displays generated models in an orbitable Rig Inspector, overlays the locally installed Bannerlord skeleton, prepares piece-specific geometry and weights, builds LODs, exports FBX, and produces a plain-English handoff report without requiring Blender knowledge.
+Bannerlord Model Forge is a focused Windows armour workstation for Mount & Blade II: Bannerlord. Its modern Qt studio displays models on a character-fitting stage, overlays the locally installed Bannerlord skeleton, prepares piece-specific geometry and weights, builds LODs, exports FBX, and produces a plain-English handoff report without requiring Blender knowledge.
 
 It is intentionally honest about the hard part: arbitrary armour cannot be rigged reliably from a bare skeleton alone. The MVP transfers weights only from a close-fitting weighted reference you are legally allowed to use, reports confidence, and sends uncertain results to a manual Modding Kit review. Ordinary weapons use a rigid item workflow; exceptional one-bone weapon skinning is opt-in.
 
@@ -25,7 +25,7 @@ You need Windows, Python 3.11 or newer, and an internet connection for first-tim
    .\scripts\Start.ps1
    ```
 
-3. Drop a model into the large box, or click **Use training sample**.
+3. Drop a model into the workspace rail, or click **Load original mannequin sample**.
 4. Choose the exact piece: helmet, torso clothing/armour, pauldrons, gloves/bracers, cape, skirt/tassets, boots/greaves, shield, or weapon.
 5. Click **Analyze and prepare**.
 6. Click **Open result folder** and start with `validation_report.md`.
@@ -40,20 +40,23 @@ To rebuild the executable after changing the source code:
 .\scripts\Build-Exe.ps1
 ```
 
-Advanced settings are hidden by default. They expose the triangle target, an armour reference-weight manifest, and an exceptional rigid bone for a weapon template that truly expects skinning.
+The right-hand studio tabs expose the triangle budget, optional armour reference-weight manifest, bone heatmaps, model statistics, and production validation gates without leaving the fitting viewport.
 
-## Rig Inspector
+## Rigging Studio
 
-The right side of the app is an interactive model and rig viewport:
+The centre of the app is a large interactive fitting viewport, with assets and workflow on the left and Bannerlord-specific rig, inspection, and validation panels on the right:
 
 - drag with the left mouse button to orbit;
 - use the mouse wheel to zoom;
 - switch between front, side, and three-quarter views;
+- switch between a single fitting stage and a synchronized five-slot comparison stage;
 - toggle wireframe and skeleton visibility;
 - see the relevant bone region highlighted for the selected armour piece;
 - select any weighted bone to display a per-vertex weight heatmap.
 
 The app uses Bannerlord's locally installed human skeleton read-only. It generates visual overlay data and renders, but never copies or redistributes the FBX itself.
+
+The stage uses an original checker/matte floor and cool-key, cool-rim, warm-fill studio lighting informed by the Modding Kit's readable character-preview scene definitions. It does not redistribute TaleWorlds scene or character assets.
 
 Rigging has three deliberately distinct confidence tiers:
 

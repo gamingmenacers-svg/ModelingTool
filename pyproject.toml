@@ -16,7 +16,7 @@ dependencies = [
   "trimesh>=4.5,<5",
   "fast-simplification>=0.1.12,<1",
   "networkx>=3.4,<4",
-  "tkinterdnd2>=0.4.2,<1",
+  "PySide6>=6.10,<7",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +29,7 @@ build = [
 ]
 
 [project.scripts]
-bannerlord-model-forge = "bannerlord_model_forge.app:main"
+bannerlord-model-forge = "bannerlord_model_forge.qt_app:main"
 bmf = "bannerlord_model_forge.cli:main"
 
 [tool.setuptools.packages.find]
