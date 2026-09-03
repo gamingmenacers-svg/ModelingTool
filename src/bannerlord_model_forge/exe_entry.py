@@ -22,12 +22,20 @@ def packaged_self_test(output_root: Path) -> int:
             output_root=output_root / "jobs",
             enable_blender_export=False,
         )
+        material_manifest = result.artifacts.get("material_manifest")
+        packed_specular = result.artifacts.get("material_packed_specular")
+        if not material_manifest or not material_manifest.is_file():
+            raise RuntimeError("Packaged material compiler did not create its manifest.")
+        if not packed_specular or not packed_specular.is_file():
+            raise RuntimeError("Packaged material compiler did not create a packed _s texture.")
         payload = {
             "status": "passed",
             "before_triangles": result.before.triangles,
             "after_triangles": result.after.triangles,
             "lod_triangles": [stats.triangles for stats in result.lod_stats],
             "output_dir": str(result.output_dir),
+            "material_manifest": str(material_manifest),
+            "packed_specular": str(packed_specular),
         }
         marker.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return 0

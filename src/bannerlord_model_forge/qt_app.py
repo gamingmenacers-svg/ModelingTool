@@ -43,6 +43,7 @@ from .blender_backend import detect_blender
 from .config import BONE_REGION_PATTERNS, PRESETS, project_root
 from .game_install import inspect_game_install
 from .gpu_viewport import RigViewport
+from .material_compiler import inspect_source_material
 from .mesh_io import MeshPart, export_mesh, load_mesh
 from .pipeline import run_pipeline
 from .preview_import import PreviewAsset, load_preview_asset
@@ -125,6 +126,34 @@ def muted(text: str, wrap: bool = False) -> QLabel:
     label.setObjectName("Muted")
     label.setWordWrap(wrap)
     return label
+
+
+def material_inspection_text(inspection) -> str:
+    labels = (
+        ("albedo", "Base colour"),
+        ("normal", "Normal"),
+        ("metallic_roughness", "Metal / roughness"),
+        ("occlusion", "Ambient occlusion"),
+        ("emissive", "Emissive"),
+    )
+    lines = ["DETECTED FROM FBX"]
+    for key, label in labels:
+        slot = inspection.source_slots[key]
+        if slot.get("present"):
+            lines.append(f"✓  {label}  {slot['width']}×{slot['height']}")
+        else:
+            lines.append(f"—  {label}  not supplied")
+    lines.append("")
+    lines.append("COMPILER DECISION")
+    if inspection.source_slots["albedo"].get("present"):
+        lines.append("✓  Preserve source pixels as _d")
+    if inspection.source_slots["metallic_roughness"].get("present") or inspection.source_slots["occlusion"].get("present"):
+        lines.append("✓  Pack source metallic / gloss / AO as _s")
+    else:
+        lines.append("i  Build _s from explicit conservative defaults")
+    if inspection.authored_alpha_mode != "OPAQUE" and not inspection.meaningful_alpha:
+        lines.append(f"✓  Alpha {inspection.authored_alpha_mode} → OPAQUE (image is fully opaque)")
+    return "\n".join(lines)
 
 
 def card(layout: QVBoxLayout | QHBoxLayout | None = None) -> QFrame:
@@ -886,11 +915,19 @@ class ForgeStudio(QMainWindow):
         layout.addSpacing(8)
         layout.addWidget(section_label("Material preview"))
         self.material_preview_combo = QComboBox()
-        self.material_preview_combo.addItem("Studio material — recommended", "studio_lit")
-        self.material_preview_combo.addItem("Base colour — source image", "base_color")
-        self.material_preview_combo.setToolTip("Base colour shows the embedded image without fake lighting. Studio lighting adds viewport shading.")
+        self.material_preview_combo.addItem("Studio lighting — approximate", "studio_lit")
+        self.material_preview_combo.addItem("Base colour — exact source pixels", "base_color")
+        self.material_preview_combo.setToolTip("Base colour shows the embedded image without viewport lighting. Studio lighting adds an approximate material preview.")
         self.material_preview_combo.currentIndexChanged.connect(self._material_preview_changed)
         layout.addWidget(self.material_preview_combo)
+        self.material_source_status = muted(
+            "Select one piece to inspect every material map actually supplied by its FBX.",
+            True,
+        )
+        material_status_layout = QVBoxLayout()
+        material_status_layout.setContentsMargins(11, 9, 11, 9)
+        material_status_layout.addWidget(self.material_source_status)
+        layout.addWidget(card(material_status_layout))
         self.texture_flip_u_check = QCheckBox("Flip texture horizontally (U)")
         self.texture_flip_v_check = QCheckBox("Flip texture vertically (V)")
         self.texture_flip_u_check.setToolTip("Corrects exporters that store the texture direction differently. Source UVs remain untouched.")
@@ -1007,6 +1044,13 @@ class ForgeStudio(QMainWindow):
                 self.signals.log.emit(f"FBX preview ready: {asset.display_path.name}")
             textured = 0
             texture_sizes: set[tuple[int, int]] = set()
+            map_counts = {
+                "base": 0,
+                "normal": 0,
+                "metal/rough": 0,
+                "AO": 0,
+                "emissive": 0,
+            }
             for part in asset.parts:
                 material = getattr(part.mesh.visual, "material", None)
                 image = getattr(material, "baseColorTexture", None) if material is not None else None
@@ -1014,13 +1058,27 @@ class ForgeStudio(QMainWindow):
                     image = getattr(material, "image", None)
                 if image is not None and hasattr(image, "size"):
                     textured += 1
+                    map_counts["base"] += 1
                     texture_sizes.add(tuple(int(value) for value in image.size))
+                for label, attribute in (
+                    ("normal", "normalTexture"),
+                    ("metal/rough", "metallicRoughnessTexture"),
+                    ("AO", "occlusionTexture"),
+                    ("emissive", "emissiveTexture"),
+                ):
+                    candidate = getattr(material, attribute, None) if material is not None else None
+                    if candidate is not None and hasattr(candidate, "size"):
+                        map_counts[label] += 1
             texture_note = (
                 " • textures " + ", ".join(f"{width}×{height}" for width, height in sorted(texture_sizes))
                 if texture_sizes
                 else " • no embedded base-colour image"
             )
             self.signals.log.emit(f"Detected {len(asset.parts)} selectable mesh pieces • {textured} UV-textured{texture_note}")
+            self.signals.log.emit(
+                "Material maps actually present across pieces • "
+                + " • ".join(f"{label} {count}" for label, count in map_counts.items())
+            )
             self.signals.preview_ready.emit(asset)
         except Exception as exc:
             self.signals.preview_failed.emit(f"Could not display {path.name}: {exc}")
@@ -1038,6 +1096,28 @@ class ForgeStudio(QMainWindow):
             label=self.source_path.name,
             preset_key=self.piece_combo.currentData(),
         )
+        materials = [getattr(part.mesh.visual, "material", None) for part in asset.parts]
+        has_base_colour = any(
+            getattr(material, "baseColorTexture", None) is not None
+            or getattr(material, "image", None) is not None
+            for material in materials
+            if material is not None
+        )
+        has_pbr_support = any(
+            any(
+                getattr(material, attribute, None) is not None
+                for attribute in ("normalTexture", "metallicRoughnessTexture", "occlusionTexture")
+            )
+            for material in materials
+            if material is not None
+        )
+        if has_base_colour and not has_pbr_support:
+            exact_index = self.material_preview_combo.findData("base_color")
+            self.material_preview_combo.setCurrentIndex(exact_index)
+            self._log(
+                "This FBX supplies base colour only, so the viewport is showing exact source pixels by default. "
+                "Studio lighting remains available as an approximation."
+            )
         self.return_to_set_button.setVisible(False)
         self._refresh_scene_list()
         self.job_label.setText("READY TO ANALYZE")
@@ -1127,7 +1207,8 @@ class ForgeStudio(QMainWindow):
         self.solo_part_button.setEnabled(editable and len(indices) == 1)
         self._set_transform_controls_enabled(editable and len(indices) == 1)
         if len(indices) == 1 and self.preview_asset is not None:
-            name = self.preview_asset.parts[indices[0]].name
+            selected_part = self.preview_asset.parts[indices[0]]
+            name = selected_part.name
             self.forge_button.setText(f"Auto-rig selected • {name[:22]}")
             if editable:
                 self.inspector_tabs.setCurrentIndex(1)
@@ -1135,9 +1216,14 @@ class ForgeStudio(QMainWindow):
             self.orientation_status.setText(
                 f"{name} • {'orientation modified' if changed else 'imported orientation'}"
             )
+            inspection = inspect_source_material(selected_part.mesh)
+            self.material_source_status.setText(material_inspection_text(inspection))
         else:
             self.forge_button.setText("Auto-rig selected piece")
             self.orientation_status.setText("Select one armour piece to rotate it.")
+            self.material_source_status.setText(
+                "Select one piece to inspect every material map actually supplied by its FBX."
+            )
 
     def _set_transform_controls_enabled(self, enabled: bool) -> None:
         for control in (
@@ -1452,6 +1538,27 @@ class ForgeStudio(QMainWindow):
         )
         self.workflow_labels[5].setStyleSheet("color:#f5bd68;")
         self._show_validation_results(result.validation)
+        material_manifest = result.artifacts.get("material_manifest")
+        if material_manifest and material_manifest.is_file():
+            material_payload = json.loads(material_manifest.read_text(encoding="utf-8"))
+            source_material = material_payload.get("source_material", {})
+            source_slots = source_material.get("source_slots", {})
+            detected = [
+                label
+                for key, label in (
+                    ("albedo", "base colour"),
+                    ("normal", "normal"),
+                    ("metallic_roughness", "metal/rough"),
+                    ("occlusion", "AO"),
+                    ("emissive", "emissive"),
+                )
+                if source_slots.get(key, {}).get("present")
+            ]
+            generated = [Path(value).name for value in material_payload.get("outputs", {}).values()]
+            self.material_source_status.setText(
+                "Source maps: " + (", ".join(detected) if detected else "none")
+                + "\nCompiled: " + (", ".join(generated) if generated else "none")
+            )
         self._log(f"Prepared {result.before.triangles:,} → {result.after.triangles:,} triangles")
         self._log(f"Rigging: {result.rigging.status} • {result.rigging.confidence:.0%} confidence")
         self._log(f"Game-ready gates: {errors} errors • {warnings} warnings • Modding Kit import/publish still required")

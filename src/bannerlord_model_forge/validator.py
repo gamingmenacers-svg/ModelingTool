@@ -5,6 +5,7 @@ import re
 import numpy as np
 
 from .config import Preset
+from .material_compiler import MaterialCompileResult
 from .models import MeshStats, QualityMetrics, ValidationItem
 
 
@@ -138,6 +139,47 @@ def validate_skeleton_manifest(bones: list[str]) -> list[ValidationItem]:
         items.append(_item("bone_names", "pass", "Bone naming", "Bone suffix indices are unique and contiguous from zero."))
     else:
         items.append(_item("bone_names", "error", "Bone naming", "Bone suffix indices must be unique, contiguous, and lower than the bone count."))
+    return items
+
+
+def validate_material_compilation(
+    result: MaterialCompileResult, has_uv: bool
+) -> list[ValidationItem]:
+    items: list[ValidationItem] = []
+    if "albedo" in result.outputs and has_uv:
+        slot = result.inspection.source_slots["albedo"]
+        items.append(
+            _item(
+                "compiled_albedo",
+                "pass",
+                "Compiled albedo",
+                f"Preserved the source base colour as _d at {slot['width']}×{slot['height']} with its original pixels and meaningful alpha only.",
+            )
+        )
+    elif "albedo" in result.outputs:
+        items.append(_item("compiled_albedo", "error", "Compiled albedo", "A base-colour image exists, but the mesh has no usable per-vertex UV channel."))
+    else:
+        items.append(_item("compiled_albedo", "warning", "Albedo missing", "No base-colour image was supplied. Assign or author one before the material can match the source appearance."))
+    if "normal" in result.outputs:
+        items.append(_item("compiled_normal", "pass", "Compiled normal map", "Preserved the source tangent-space normal image as _n."))
+    else:
+        items.append(_item("compiled_normal", "warning", "Normal map missing", "No normal image was supplied. Forge did not invent surface detail; add a valid tangent-space normal map or accept flat shading."))
+    specular_level = "pass" if result.packed_specular_uses_source_maps else "info"
+    specular_detail = (
+        "Packed source metallic/roughness/AO data into Bannerlord _s channels: R metallic, G glossiness, B ambient occlusion."
+        if result.packed_specular_uses_source_maps
+        else "Generated a conservative _s texture from recorded scalar defaults because the FBX supplied no metallic/roughness/AO images."
+    )
+    items.append(_item("compiled_specular", specular_level, "Packed Bannerlord specular", specular_detail))
+    if result.inspection.authored_alpha_mode != "OPAQUE" and not result.inspection.meaningful_alpha:
+        items.append(
+            _item(
+                "material_alpha",
+                "pass",
+                "Opaque alpha corrected",
+                f"The importer tagged this material {result.inspection.authored_alpha_mode}, but its albedo is fully opaque. The handoff recommends OPAQUE to prevent sorting and halo artifacts.",
+            )
+        )
     return items
 
 

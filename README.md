@@ -57,7 +57,7 @@ The centre of the app is a hardware-accelerated OpenGL fitting viewport, with as
 - use **Frame all** to recalculate the live bounds and centre every visible piece, including pieces you have rotated;
 - use **Solo selected** for an unobstructed material/shape check and **Show set** to return;
 - rotate the selected piece around its imported X/Y/Z axes in 90° steps or turn it over by 180°, without modifying the source file;
-- use the recommended studio material view, switch to the literal base-colour image for diagnosis, or flip U/V display orientation for an unusual exporter;
+- use the approximate studio-lighting view, switch to exact source base-colour pixels, or flip U/V display orientation for an unusual exporter; base-colour-only FBX files automatically open in the exact mode;
 - Ctrl-click several outliner rows and use **Remove selected** (or Delete) to discard unwanted working-scene pieces non-destructively;
 - use the mouse wheel to zoom;
 - switch between front, side, and three-quarter views;
@@ -69,6 +69,8 @@ The centre of the app is a hardware-accelerated OpenGL fitting viewport, with as
 On launch, the app uses Blender to read the locally installed `human_skeleton.fbx` and caches only its rest-pose joint data. The viewport displays the exact 31-bone Bannerlord hierarchy immediately, including the original `bip01_*` names and joint positions. Imported armour is normalized against that rig—not against a fake mannequin—so incorrect scale, origin, orientation, or bind-pose alignment is visible before auto-rigging. The source FBX stays in place and is never copied or modified.
 
 The FBX preview conversion separates disconnected geometry into named scene pieces while preserving object transforms, UVs, materials, and embedded images. It also removes a redundant fully-opaque duplicate alpha link from the temporary Blender material graph when needed; this prevents the glTF exporter from assigning the wrong sampler while leaving the original FBX untouched. The GPU material preview samples the original base-colour texture instead of flattening it into approximate vertex colours. Textured pieces that need triangle reduction are decimated through Blender so their UV material survives, and exported FBX files copy/embed available textures. The stage also uses authored smooth vertex normals, a depth buffer, multisample antialiasing, and a checker/matte floor. It does not redistribute TaleWorlds scene or character assets.
+
+The **Material preview** inspector inventories the maps actually supplied for the selected piece—base colour, tangent-space normal, metallic/roughness, ambient occlusion, and emissive—rather than pretending missing maps were imported. Auto-rig runs a non-destructive material compiler alongside the geometry pipeline. It preserves source albedo as `_d`, preserves a supplied normal as `_n`, converts glTF roughness to Bannerlord glossiness, and packs metallic/gloss/AO into `_s` as documented by TaleWorlds. Missing metallic/roughness/AO inputs receive explicit conservative scalar defaults and are recorded as assumptions in `<asset>_material.json`, the validation report, and `bannerlord_import_manifest.json`.
 
 Rigging has three deliberately distinct confidence tiers:
 
@@ -83,6 +85,7 @@ Provisional auto-weights are useful for a first visual fit, not a production-qua
 OBJ, GLB/GLTF, PLY, and STL can be inspected, cleaned, simplified, previewed, validated, and exported directly. The app generates:
 
 - a prepared GLB and OBJ;
+- lossless PNG material outputs using Bannerlord `_d`, `_n`, and packed `_s` conventions where source channels exist, plus a material provenance manifest;
 - decreasing `.lod1`, `.lod2`, and `.lod3` OBJ meshes when possible;
 - a GLB review scene containing the named LODs;
 - a `bannerlord_import_manifest.json` containing the exact remaining material, skeleton, cloth, LOD, module-folder, Resource Browser, publish, and in-game-test gates;
@@ -182,7 +185,7 @@ Tests cover deterministic mesh processing, non-destructive source handling, obje
 - Reference-transferred skinned FBX export requires a matching skeleton path in the reference bundle; the app will not invent one.
 - Proximity auto-weights are a reviewable fallback, not a replacement for a close-fitting weighted armour template.
 - The viewport is a focused inspection/weighting workspace, not a general-purpose modelling replacement for every Blender operation.
-- Base-colour images and UVs are displayed and preserved through the main textured path. Normal-map preview, UV-overlap repair, texel-density tools, and Bannerlord-specific texture packing still need deeper tooling.
+- Base-colour images and UVs are displayed and preserved; source PBR maps are inventoried and Bannerlord `_s` packing is implemented. Live normal/packed-channel viewport modes, adjacent-file semantic discovery, UV-overlap repair, and texel-density tools remain roadmap work.
 - Quality loss is an efficient sampled approximation, not a rendered perceptual metric.
 - Static geometry cannot prove animation clipping safety.
 - Materials, cloth simulation, collision bodies, and module item/crafting XML still need Modding Kit decisions.

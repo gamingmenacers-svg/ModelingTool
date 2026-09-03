@@ -78,13 +78,14 @@ The suite should choose the strongest available method per piece, not expose one
 - Reversible auto-fit against the exact local rig, including left/right placement.
 - Unit/orientation/offset report and candidate comparison.
 - Dynamic engine-readiness gates and machine-readable Modding Kit handoff manifest.
-- Complete PBR texture inventory with visible channel previews.
+- Complete per-piece PBR texture inventory in the inspector and generated handoff manifests. *(Implemented; dedicated non-albedo channel rendering remains 0.3.)*
 
 ### 0.3 — material compiler
 
-- Extract embedded and adjacent textures from FBX.
+- Extract embedded textures from FBX. *(Implemented for maps retained by Blender/glTF conversion.)*
 - Semantic map detection with confidence and manual overrides.
-- Normal-map convention switch, roughness-to-gloss conversion, M/G/AO packing, suffix rename, and lossless master copies.
+- Normal-map convention switch and manual overrides.
+- Roughness-to-gloss conversion, M/G/AO packing, suffix rename, lossless PNG outputs, and source-provenance manifest. *(Implemented.)*
 - Live Bannerlord-style PBR viewport rather than base-colour-only shading.
 
 ### 0.4 — production weight transfer

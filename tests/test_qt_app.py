@@ -119,6 +119,7 @@ def test_selected_piece_rotation_is_non_destructive_and_reaches_export_transform
         assert window.viewport.material_lit is True
         window.texture_flip_v_check.setChecked(True)
         assert window.viewport.uv_flip_bits == 2
+        assert "Base colour  not supplied" in window.material_source_status.text()
     finally:
         window.close()
         app.processEvents()

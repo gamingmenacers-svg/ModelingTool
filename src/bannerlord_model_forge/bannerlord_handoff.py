@@ -25,6 +25,13 @@ def write_bannerlord_handoff(
     geometry = geometry or artifacts.get("bannerlord_provisional_skinned_fbx")
     geometry = geometry or artifacts.get("bannerlord_fbx")
     skinned = preset.rig_mode != "rigid"
+    material_manifest_payload: dict[str, object] = {}
+    material_manifest_path = artifacts.get("material_manifest")
+    if material_manifest_path and material_manifest_path.is_file():
+        material_manifest_payload = json.loads(material_manifest_path.read_text(encoding="utf-8"))
+    material_mapping = material_manifest_payload.get("bannerlord_mapping", {})
+    if not isinstance(material_mapping, dict):
+        material_mapping = {}
     payload = {
         "schema": 1,
         "target": "Mount & Blade II: Bannerlord",
@@ -51,11 +58,19 @@ def write_bannerlord_handoff(
         },
         "material": {
             "shader": "pbr_metallic",
+            "compiler_manifest": str(artifacts.get("material_manifest", "")),
+            "source_inspection": material_manifest_payload.get("source_material", {}),
+            "generated_textures": {
+                name.removeprefix("material_"): str(path)
+                for name, path in artifacts.items()
+                if name.startswith("material_") and name != "material_manifest"
+            },
             "vertex_layout": {
-                "bump_map": True,
+                "bump_map": "material_normal" in artifacts,
                 "skinning": skinned,
                 "skinning_precise": False,
             },
+            "recommended_alpha_mode": material_mapping.get("recommended_alpha_mode", "OPAQUE"),
             "texture_suffixes": {
                 "albedo": "_d",
                 "normal": "_n",

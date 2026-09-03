@@ -17,6 +17,7 @@ from .blender_backend import (
 from .bannerlord_handoff import write_bannerlord_handoff
 from .config import BONE_REGION_PATTERNS, PRESETS, default_output_root
 from .game_install import inspect_game_install
+from .material_compiler import compile_bannerlord_material
 from .mesh_io import export_lod_scene, export_mesh, load_mesh, mesh_stats
 from .models import PipelineResult, ValidationItem
 from .optimizer import clean_mesh, make_lods, quality_metrics, simplify_mesh
@@ -26,7 +27,12 @@ from .rigging.base import ManualRiggingBackend, RiggingRequest
 from .rigging.proximity import SkeletonProximityRiggingBackend
 from .rigging.reference_transfer import ReferenceWeightTransferBackend
 from .rigging.weapon import WeaponRiggingBackend
-from .validator import validate_mesh, validate_skeleton_manifest, validate_weight_rows
+from .validator import (
+    validate_material_compilation,
+    validate_mesh,
+    validate_skeleton_manifest,
+    validate_weight_rows,
+)
 
 
 Progress = Callable[[str], None]
@@ -129,6 +135,16 @@ def run_pipeline(
     lod_bundle = geometry_dir / f"{asset_name}_with_lods.glb"
     export_lod_scene(named, lod_bundle)
     artifacts["lod_bundle_glb"] = lod_bundle
+
+    say("Compiling source PBR maps into Bannerlord material channels...")
+    material_result = compile_bannerlord_material(
+        prepared,
+        job_dir / "materials",
+        asset_name,
+    )
+    artifacts["material_manifest"] = material_result.manifest_path
+    for texture_kind, texture_path in material_result.outputs.items():
+        artifacts[f"material_{texture_kind}"] = texture_path
 
     render_preview(original, job_dir / "preview_before.png", "Original (read-only)")
     render_preview(prepared, job_dir / "preview_after.png", "Prepared base mesh")
@@ -244,6 +260,7 @@ def run_pipeline(
         quality,
         [stats.triangles for stats in lod_stats],
     )
+    validation.extend(validate_material_compilation(material_result, after.has_uv))
     if rigging.weights_path and rigging.weights_path.is_file():
         weight_payload = json.loads(rigging.weights_path.read_text(encoding="utf-8"))
         bones = [str(name) for name in weight_payload.get("bones", [])]

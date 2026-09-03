@@ -35,6 +35,11 @@ def test_end_to_end_is_non_destructive_and_generates_lods(tmp_path: Path) -> Non
     assert report["source"]["modified"] is False
     assert report["source"]["sha256"] == source_hash
     assert any(path.name.endswith(".lod1.obj") for path in result.artifacts.values())
+    assert result.artifacts["material_manifest"].is_file()
+    assert result.artifacts["material_packed_specular"].name.endswith("_s.png")
+    material = json.loads(result.artifacts["material_manifest"].read_text(encoding="utf-8"))
+    assert material["shader"] == "pbr_metallic"
+    assert material["source_modified"] is False
 
 
 def test_weapon_pipeline_emits_rigid_setup(tmp_path: Path) -> None:
@@ -53,4 +58,7 @@ def test_weapon_pipeline_emits_rigid_setup(tmp_path: Path) -> None:
     handoff = json.loads(result.artifacts["bannerlord_import_manifest"].read_text(encoding="utf-8"))
     assert handoff["status"] == "modding_kit_import_required"
     assert handoff["material"]["packed_specular_channels"]["green"] == "glossiness (1 - roughness)"
+    assert handoff["material"]["compiler_manifest"].endswith("_material.json")
+    assert handoff["material"]["generated_textures"]["packed_specular"].endswith("_s.png")
+    assert handoff["material"]["vertex_layout"]["bump_map"] is False
     assert handoff["truth"]["tpac_compiled"] is False
