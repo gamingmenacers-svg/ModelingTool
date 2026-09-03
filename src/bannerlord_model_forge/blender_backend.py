@@ -38,7 +38,12 @@ def detect_blender() -> BlenderStatus:
     )
 
 
-def convert_with_blender(source: Path, destination: Path) -> Path:
+def convert_with_blender(
+    source: Path,
+    destination: Path,
+    split_loose: bool = False,
+    target_faces: int | None = None,
+) -> Path:
     status = detect_blender()
     if not status.found or not status.executable:
         raise RuntimeError(status.note)
@@ -56,6 +61,10 @@ def convert_with_blender(source: Path, destination: Path) -> Path:
         "--output",
         str(destination.resolve()),
     ]
+    if split_loose:
+        command.append("--split-loose")
+    if target_faces is not None:
+        command.extend(("--target-faces", str(max(4, int(target_faces)))))
     completed = subprocess.run(command, capture_output=True, text=True, timeout=600, check=False)
     if completed.returncode != 0 or not destination.is_file():
         detail = (completed.stderr or completed.stdout)[-4000:]

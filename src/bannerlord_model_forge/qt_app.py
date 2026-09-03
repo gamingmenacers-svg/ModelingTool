@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -11,6 +12,7 @@ from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QFont, QIcon, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -40,9 +42,9 @@ from .blender_backend import detect_blender
 from .config import BONE_REGION_PATTERNS, PRESETS, project_root
 from .game_install import inspect_game_install
 from .gpu_viewport import RigViewport
-from .mesh_io import load_mesh
+from .mesh_io import MeshPart, export_mesh, load_mesh
 from .pipeline import run_pipeline
-from .preview_import import load_preview_mesh
+from .preview_import import PreviewAsset, load_preview_asset
 from .sample import create_sample
 from .skeleton_import import load_bannerlord_skeleton
 
@@ -490,6 +492,10 @@ class ForgeStudio(QMainWindow):
         self.setMinimumSize(1180, 760)
         self.setAcceptDrops(True)
         self.source_path: Path | None = None
+        self.source_asset: PreviewAsset | None = None
+        self.preview_asset: PreviewAsset | None = None
+        self.removed_parts: set[int] = set()
+        self.active_rig_part_name = ""
         self.output_dir: Path | None = None
         self.skeleton_data_path: Path | None = None
         self.signals = AppSignals()
@@ -594,13 +600,46 @@ class ForgeStudio(QMainWindow):
         layout.addWidget(section_label("Scene outliner"))
         self.asset_list = QListWidget()
         self.asset_list.setMinimumHeight(112)
-        self.asset_list.setMaximumHeight(164)
+        self.asset_list.setMaximumHeight(260)
+        self.asset_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.asset_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.asset_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.asset_list.itemSelectionChanged.connect(self._scene_selection_changed)
+        self.asset_list.itemDoubleClicked.connect(lambda _item: self._frame_selected_part())
         placeholder = QListWidgetItem("Preparing linked Bannerlord rig…")
         placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
         self.asset_list.addItem(placeholder)
         layout.addWidget(self.asset_list)
+        edit_row = QHBoxLayout()
+        self.remove_part_button = QPushButton("Remove selected")
+        self.remove_part_button.setObjectName("Quiet")
+        self.remove_part_button.setEnabled(False)
+        self.remove_part_button.setToolTip("Removes pieces only from this working scene. The original model is never changed.")
+        self.remove_part_button.clicked.connect(self._remove_selected_parts)
+        self.restore_parts_button = QPushButton("Restore all")
+        self.restore_parts_button.setObjectName("Quiet")
+        self.restore_parts_button.setEnabled(False)
+        self.restore_parts_button.clicked.connect(self._restore_all_parts)
+        edit_row.addWidget(self.remove_part_button, 1)
+        edit_row.addWidget(self.restore_parts_button)
+        layout.addLayout(edit_row)
+        visibility_row = QHBoxLayout()
+        self.solo_part_button = QPushButton("Solo selected")
+        self.solo_part_button.setObjectName("Quiet")
+        self.solo_part_button.setEnabled(False)
+        self.solo_part_button.clicked.connect(self._solo_selected_part)
+        self.show_set_button = QPushButton("Show set")
+        self.show_set_button.setObjectName("Quiet")
+        self.show_set_button.setEnabled(False)
+        self.show_set_button.clicked.connect(self._show_working_set)
+        visibility_row.addWidget(self.solo_part_button, 1)
+        visibility_row.addWidget(self.show_set_button)
+        layout.addLayout(visibility_row)
+        self.return_to_set_button = QPushButton("← Return to imported set")
+        self.return_to_set_button.setObjectName("Quiet")
+        self.return_to_set_button.setVisible(False)
+        self.return_to_set_button.clicked.connect(self._return_to_source_set)
+        layout.addWidget(self.return_to_set_button)
         layout.addSpacing(7)
         layout.addWidget(section_label("Workflow"))
         self.workflow_labels: list[QLabel] = []
@@ -648,6 +687,17 @@ class ForgeStudio(QMainWindow):
             button.setText(text)
             button.clicked.connect(lambda _checked=False, angles=view: self.viewport.set_view(*angles))
             row.addWidget(button)
+        row.addSpacing(8)
+        self.frame_selection_button = QToolButton()
+        self.frame_selection_button.setText("Frame selected")
+        self.frame_selection_button.setEnabled(False)
+        self.frame_selection_button.setToolTip("Zoom the camera to the selected armour piece. Double-clicking an outliner item does the same.")
+        self.frame_selection_button.clicked.connect(self._frame_selected_part)
+        row.addWidget(self.frame_selection_button)
+        frame_all = QToolButton()
+        frame_all.setText("Frame all")
+        frame_all.clicked.connect(lambda: self.viewport.frame_all_parts())
+        row.addWidget(frame_all)
         row.addStretch(1)
         self.vertex_chip = muted("VERTICES —")
         self.face_chip = muted("TRIANGLES —")
@@ -665,6 +715,8 @@ class ForgeStudio(QMainWindow):
         self.viewport.bone_options_changed.connect(self._set_bones)
         self.viewport.statistics_changed.connect(self._set_statistics)
         self.viewport.render_error.connect(lambda message: self._log(f"GPU viewport error: {message}"))
+        self.viewport.part_selected.connect(self._select_part_from_viewport)
+        self.viewport.delete_requested.connect(self._remove_selected_parts)
         middle.addWidget(self.viewport)
         console_frame = QFrame()
         console_layout = QVBoxLayout(console_frame)
@@ -711,7 +763,7 @@ class ForgeStudio(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
-        self.forge_button = QPushButton("Analyze & auto-rig")
+        self.forge_button = QPushButton("Auto-rig selected piece")
         self.forge_button.setObjectName("Primary")
         self.forge_button.clicked.connect(self._start_pipeline)
         self.open_button = QPushButton("Open result folder")
@@ -869,6 +921,9 @@ class ForgeStudio(QMainWindow):
             QMessageBox.warning(self, "Unsupported format", "Choose FBX, GLB/GLTF, OBJ, PLY, or STL.")
             return
         self.source_path = path
+        self.source_asset = None
+        self.preview_asset = None
+        self.removed_parts.clear()
         self.output_dir = None
         self.open_button.setEnabled(False)
         self.drop_card.set_path(path)
@@ -883,22 +938,47 @@ class ForgeStudio(QMainWindow):
         try:
             if path.suffix.lower() == ".fbx":
                 self.signals.log.emit("Converting FBX read-only through Blender for immediate viewport display…")
-            mesh, converted = load_preview_mesh(path, project_root() / "work" / "preview-cache")
+            asset = load_preview_asset(path, project_root() / "work" / "preview-cache")
             if path.suffix.lower() == ".fbx":
-                self.signals.log.emit(f"FBX preview ready: {converted.name}")
-            self.signals.preview_ready.emit((mesh, path.name))
+                self.signals.log.emit(f"FBX preview ready: {asset.display_path.name}")
+            textured = 0
+            texture_sizes: set[tuple[int, int]] = set()
+            for part in asset.parts:
+                material = getattr(part.mesh.visual, "material", None)
+                image = getattr(material, "baseColorTexture", None) if material is not None else None
+                if image is None and material is not None:
+                    image = getattr(material, "image", None)
+                if image is not None and hasattr(image, "size"):
+                    textured += 1
+                    texture_sizes.add(tuple(int(value) for value in image.size))
+            texture_note = (
+                " • textures " + ", ".join(f"{width}×{height}" for width, height in sorted(texture_sizes))
+                if texture_sizes
+                else " • no embedded base-colour image"
+            )
+            self.signals.log.emit(f"Detected {len(asset.parts)} selectable mesh pieces • {textured} UV-textured{texture_note}")
+            self.signals.preview_ready.emit(asset)
         except Exception as exc:
             self.signals.preview_failed.emit(f"Could not display {path.name}: {exc}")
 
     def _show_source_preview(self, payload: object) -> None:
-        mesh, name = payload  # type: ignore[misc]
-        self.viewport.set_model(
-            mesh,
+        asset = payload  # type: ignore[assignment]
+        if not isinstance(asset, PreviewAsset) or asset.source_path != self.source_path:
+            return
+        self.source_asset = asset
+        self.preview_asset = asset
+        self.removed_parts.clear()
+        self.viewport.set_parts(
+            asset.parts,
             self.skeleton_data_path,
-            label=name,
+            label=self.source_path.name,
             preset_key=self.piece_combo.currentData(),
         )
+        self.return_to_set_button.setVisible(False)
+        self._refresh_scene_list()
         self.job_label.setText("READY TO ANALYZE")
+        if len(asset.parts) > 1:
+            self._log("Click a piece in the viewport or Scene outliner, then use Auto-rig selected piece. Delete removes only the working copy.")
 
     def _skeleton_worker(self) -> None:
         try:
@@ -930,15 +1010,146 @@ class ForgeStudio(QMainWindow):
         self._log("Official skeleton unavailable: " + message)
 
     def _refresh_scene_list(self) -> None:
+        self.asset_list.blockSignals(True)
         self.asset_list.clear()
-        if self.source_path is not None:
-            self.asset_list.addItem("◇  MESH   " + self.source_path.name)
+        if self.preview_asset is not None:
+            is_source = self.preview_asset is self.source_asset
+            for index, part in enumerate(self.preview_asset.parts):
+                if is_source and index in self.removed_parts:
+                    continue
+                material = getattr(part.mesh.visual, "material", None)
+                image = getattr(material, "baseColorTexture", None) if material is not None else None
+                if image is None and material is not None:
+                    image = getattr(material, "image", None)
+                texture_mark = "  ◉" if image is not None else ""
+                item = QListWidgetItem(f"◇  {part.name}{texture_mark}")
+                item.setData(Qt.ItemDataRole.UserRole, index)
+                item.setToolTip(
+                    f"{len(part.mesh.faces):,} triangles • {len(part.mesh.vertices):,} vertices"
+                    + (" • UV texture" if image is not None else " • no texture image")
+                )
+                self.asset_list.addItem(item)
         if self.skeleton_data_path is not None:
-            self.asset_list.addItem("⟠  RIG      human_skeleton.fbx  [linked]")
+            rig = QListWidgetItem("⟠  RIG  human_skeleton.fbx  [linked]")
+            rig.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.asset_list.addItem(rig)
         if self.asset_list.count() == 0:
             placeholder = QListWidgetItem("Waiting for mesh and official rig…")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self.asset_list.addItem(placeholder)
+        self.asset_list.blockSignals(False)
+        editable = self.preview_asset is not None and self.preview_asset is self.source_asset
+        self.remove_part_button.setEnabled(False)
+        self.restore_parts_button.setEnabled(editable and bool(self.removed_parts))
+        self.solo_part_button.setEnabled(False)
+        self.show_set_button.setEnabled(
+            editable and any(index not in self.removed_parts for index in self.viewport.hidden_parts)
+        )
+
+    def _selected_part_indices(self) -> list[int]:
+        values: list[int] = []
+        for item in self.asset_list.selectedItems():
+            value = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(value, int):
+                values.append(value)
+        return sorted(set(values))
+
+    def _scene_selection_changed(self) -> None:
+        indices = self._selected_part_indices()
+        self.viewport.set_selected_part(indices[0] if len(indices) == 1 else -1)
+        editable = self.preview_asset is not None and self.preview_asset is self.source_asset
+        self.remove_part_button.setEnabled(editable and bool(indices))
+        self.frame_selection_button.setEnabled(len(indices) == 1)
+        self.solo_part_button.setEnabled(editable and len(indices) == 1)
+        if len(indices) == 1 and self.preview_asset is not None:
+            name = self.preview_asset.parts[indices[0]].name
+            self.forge_button.setText(f"Auto-rig selected • {name[:22]}")
+        else:
+            self.forge_button.setText("Auto-rig selected piece")
+
+    def _frame_selected_part(self) -> None:
+        indices = self._selected_part_indices()
+        if len(indices) == 1:
+            self.viewport.frame_selected_part(indices[0])
+
+    def _solo_selected_part(self) -> None:
+        if self.preview_asset is None or self.preview_asset is not self.source_asset:
+            return
+        indices = self._selected_part_indices()
+        if len(indices) != 1:
+            return
+        selected = indices[0]
+        for index in range(len(self.preview_asset.parts)):
+            self.viewport.set_part_visible(index, index == selected and index not in self.removed_parts)
+        self.viewport.set_selected_part(selected)
+        self.viewport.frame_selected_part(selected)
+        self.show_set_button.setEnabled(True)
+
+    def _show_working_set(self) -> None:
+        if self.source_asset is None or self.preview_asset is not self.source_asset:
+            return
+        self.viewport.restore_all_parts()
+        for index in self.removed_parts:
+            self.viewport.set_part_visible(index, False)
+        self.viewport.frame_all_parts()
+        self.show_set_button.setEnabled(False)
+
+    def _select_part_from_viewport(self, index: int) -> None:
+        self.asset_list.clearSelection()
+        for row in range(self.asset_list.count()):
+            item = self.asset_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == index:
+                item.setSelected(True)
+                self.asset_list.setCurrentItem(item)
+                self.asset_list.scrollToItem(item)
+                break
+
+    def _remove_selected_parts(self) -> None:
+        if self.preview_asset is None or self.preview_asset is not self.source_asset:
+            return
+        indices = self._selected_part_indices()
+        if not indices and self.viewport.selected_part >= 0:
+            indices = [self.viewport.selected_part]
+        if not indices:
+            return
+        visible_count = len(self.preview_asset.parts) - len(self.removed_parts)
+        if len(indices) >= visible_count:
+            QMessageBox.information(self, "Keep one piece", "At least one mesh piece must remain in the working scene.")
+            return
+        names = [self.preview_asset.parts[index].name for index in indices]
+        self.removed_parts.update(indices)
+        for index in indices:
+            self.viewport.set_part_visible(index, False)
+        self.viewport.set_selected_part(-1)
+        self._refresh_scene_list()
+        self._log(f"Removed {len(indices)} working-scene piece(s): {', '.join(names[:3])}{'…' if len(names) > 3 else ''}. Original file untouched.")
+
+    def _restore_all_parts(self) -> None:
+        if self.source_asset is None:
+            return
+        restored = len(self.removed_parts)
+        self.removed_parts.clear()
+        self.preview_asset = self.source_asset
+        self.viewport.restore_all_parts()
+        self._refresh_scene_list()
+        if restored:
+            self._log(f"Restored {restored} piece(s) from the in-memory import. Original file was never modified.")
+
+    def _return_to_source_set(self) -> None:
+        if self.source_asset is None:
+            return
+        self.preview_asset = self.source_asset
+        self.viewport.set_parts(
+            self.source_asset.parts,
+            self.skeleton_data_path,
+            label=self.source_path.name if self.source_path else "Imported set",
+            preset_key=self.piece_combo.currentData(),
+        )
+        for index in self.removed_parts:
+            self.viewport.set_part_visible(index, False)
+        self.return_to_set_button.setVisible(False)
+        self._refresh_scene_list()
+        self.job_label.setText("READY TO ANALYZE")
 
     def _preview_failed(self, message: str) -> None:
         self.job_label.setText("IMPORT FAILED")
@@ -955,20 +1166,45 @@ class ForgeStudio(QMainWindow):
             self.viewport.set_skeleton_data(self.skeleton_data_path, self.piece_combo.currentData())
 
     def _start_pipeline(self) -> None:
-        if self.source_path is None or not self.source_path.is_file():
+        if self.source_path is None or not self.source_path.is_file() or self.source_asset is None:
             QMessageBox.information(self, "Import a model", "Import an armour or weapon model first.")
             return
+        if self.preview_asset is not self.source_asset:
+            QMessageBox.information(self, "Return to imported set", "Return to the imported set before choosing another piece.")
+            return
+        indices = self._selected_part_indices()
+        visible_indices = [
+            index for index in range(len(self.source_asset.parts)) if index not in self.removed_parts
+        ]
+        if not indices and len(visible_indices) == 1:
+            indices = visible_indices
+        if len(indices) != 1:
+            QMessageBox.information(
+                self,
+                "Select one piece",
+                "Click exactly one armour piece in the 3D viewport or Scene outliner, then run Auto-rig selected piece.",
+            )
+            return
+        selected_index = indices[0]
+        if selected_index in self.removed_parts:
+            QMessageBox.information(self, "Piece removed", "Restore that piece before auto-rigging it.")
+            return
+        selected_part = self.source_asset.parts[selected_index]
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", selected_part.name).strip("_.") or f"piece_{selected_index + 1:02d}"
+        selected_source = project_root() / "work" / "selections" / f"{self.source_path.stem}-{safe_name}.glb"
+        export_mesh(selected_part.mesh, selected_source)
+        self.active_rig_part_name = selected_part.name
         reference = Path(self.reference_edit.text()).expanduser() if self.reference_edit.text().strip() else None
         self.forge_button.setEnabled(False)
         self.open_button.setEnabled(False)
         self.progress.setRange(0, 0)
         self.job_label.setText("ANALYZING & RIGGING")
-        self._log(f"Starting {self.piece_combo.currentText()} workflow…")
+        self._log(f"Auto-rigging only: {selected_part.name} • {len(selected_part.mesh.faces):,} triangles. Other set pieces are excluded.")
         for index in range(2, 5):
             self.workflow_labels[index].setStyleSheet("color:#62adff;")
         threading.Thread(
             target=self._pipeline_worker,
-            args=(self.source_path, self.piece_combo.currentData(), self.target_spin.value(), reference),
+            args=(selected_source, self.piece_combo.currentData(), self.target_spin.value(), reference),
             daemon=True,
         ).start()
 
@@ -989,13 +1225,18 @@ class ForgeStudio(QMainWindow):
     def _pipeline_finished(self, payload: object) -> None:
         result, mesh = payload  # type: ignore[misc]
         self.output_dir = result.output_dir
-        self.viewport.set_model(
-            mesh,
+        result_name = f"{self.active_rig_part_name} • rig result" if self.active_rig_part_name else "Prepared rig result"
+        result_part = MeshPart(result_name, mesh)
+        self.preview_asset = PreviewAsset(self.source_path or result.artifacts["prepared_glb"], result.artifacts["prepared_glb"], [result_part])
+        self.viewport.set_parts(
+            [result_part],
             result.artifacts.get("skeleton_viewport_data", self.skeleton_data_path),
             result.artifacts.get("skin_weights"),
-            "Prepared equipped fit",
+            result_name,
             result.preset_key,
         )
+        self.return_to_set_button.setVisible(self.source_asset is not None and len(self.source_asset.parts) > 1)
+        self._refresh_scene_list()
         self.forge_button.setEnabled(True)
         self.open_button.setEnabled(True)
         self.progress.setRange(0, 100)

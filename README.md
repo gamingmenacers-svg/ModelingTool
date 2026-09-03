@@ -26,9 +26,11 @@ You need Windows, Python 3.11 or newer, and an internet connection for first-tim
    ```
 
 3. Drop a model into the workspace rail, or click **Open generated fit-test mesh** (clearly labelled test geometry, not a game character).
-4. Choose the exact piece: helmet, torso clothing/armour, pauldrons, gloves/bracers, cape, skirt/tassets, boots/greaves, shield, or weapon.
-5. Click **Analyze and prepare**.
+4. Click an armour piece in the 3D viewport or its row in **Scene outliner**. Double-click the row (or use **Frame selected**) for a close view; **Solo selected** temporarily hides the rest of the set.
+5. Choose the equipment slot, then click **Auto-rig selected piece**. Only that piece is sent to the rigging pipeline.
 6. Click **Open result folder** and start with `validation_report.md`.
+
+For a multi-piece set, Ctrl-click rows to select unwanted objects and press Delete or **Remove selected**. This only hides them from the working scene; **Restore all** brings them back, and the imported FBX is never edited. After reviewing one rig result, use **Return to imported set** to select and process another piece.
 
 ### Double-clickable Windows executable
 
@@ -47,6 +49,10 @@ The right-hand studio tabs expose the triangle budget, optional armour reference
 The centre of the app is a hardware-accelerated OpenGL fitting viewport, with assets and workflow on the left and Bannerlord-specific rig, inspection, and validation panels on the right. FBX files are converted read-only through the installed Blender bridge as soon as they are selected and are displayed automatically when conversion completes:
 
 - drag with the left mouse button to orbit;
+- click a disconnected mesh piece to select it, or select it by name in the Scene outliner;
+- double-click an outliner row or use **Frame selected** to inspect that piece closely;
+- use **Solo selected** for an unobstructed material/shape check and **Show set** to return;
+- Ctrl-click several outliner rows and use **Remove selected** (or Delete) to discard unwanted working-scene pieces non-destructively;
 - use the mouse wheel to zoom;
 - switch between front, side, and three-quarter views;
 - switch between a single fitting stage and a synchronized five-slot comparison stage;
@@ -56,7 +62,7 @@ The centre of the app is a hardware-accelerated OpenGL fitting viewport, with as
 
 On launch, the app uses Blender to read the locally installed `human_skeleton.fbx` and caches only its rest-pose joint data. The viewport displays the exact 31-bone Bannerlord hierarchy immediately, including the original `bip01_*` names and joint positions. Imported armour is normalized against that rig—not against a fake mannequin—so incorrect scale, origin, orientation, or bind-pose alignment is visible before auto-rigging. The source FBX stays in place and is never copied or modified.
 
-The stage uses smooth vertex normals, a depth buffer, multisample antialiasing, an original checker/matte floor, and cool-key, cool-rim, warm-fill studio lighting informed by the Modding Kit's readable character-preview scene definitions. It does not redistribute TaleWorlds scene or character assets.
+The FBX preview conversion separates disconnected geometry into named scene pieces while preserving object transforms, UVs, materials, and embedded images. The GPU material preview samples the original base-colour texture instead of flattening it into approximate vertex colours. Textured pieces that need triangle reduction are decimated through Blender so their UV material survives, and exported FBX files copy/embed available textures. The stage also uses smooth vertex normals, a depth buffer, multisample antialiasing, and a checker/matte floor. It does not redistribute TaleWorlds scene or character assets.
 
 Rigging has three deliberately distinct confidence tiers:
 
@@ -160,7 +166,7 @@ TaleWorlds' importer is the final authority. See [docs/RESEARCH.md](docs/RESEARC
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Tests cover deterministic mesh processing, non-destructive source handling, cached preview import, LOD/output generation, skeleton validation, armour weight transfer, and rigid/one-bone weapon paths. Set `BMF_RUN_BLENDER_TESTS=1` to include a generated FBX export/import round-trip and the skinned-FBX integration path.
+Tests cover deterministic mesh processing, non-destructive source handling, object-level selection, cached preview import, LOD/output generation, skeleton validation, armour weight transfer, and rigid/one-bone weapon paths. Set `BMF_RUN_BLENDER_TESTS=1` to include generated FBX import/export, UV-preserving textured decimation, and the skinned-FBX integration path.
 
 ## Current limitations
 
@@ -169,7 +175,7 @@ Tests cover deterministic mesh processing, non-destructive source handling, cach
 - Reference-transferred skinned FBX export requires a matching skeleton path in the reference bundle; the app will not invent one.
 - Proximity auto-weights are a reviewable fallback, not a replacement for a close-fitting weighted armour template.
 - The viewport is a focused inspection/weighting workspace, not a general-purpose modelling replacement for every Blender operation.
-- UV presence is checked, but overlap, texel density, tangent-space compatibility, and texture packing need deeper tooling.
+- Base-colour images and UVs are displayed and preserved through the main textured path. Normal-map preview, UV-overlap repair, texel-density tools, and Bannerlord-specific texture packing still need deeper tooling.
 - Quality loss is an efficient sampled approximation, not a rendered perceptual metric.
 - Static geometry cannot prove animation clipping safety.
 - Materials, cloth simulation, collision bodies, and module item/crafting XML still need Modding Kit decisions.

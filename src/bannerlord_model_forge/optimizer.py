@@ -76,19 +76,20 @@ def quality_metrics(before: trimesh.Trimesh, after: trimesh.Trimesh) -> QualityM
     maximum = float(distance.max()) / diagonal * 100.0
 
     mean_angle: float | None = None
-    try:
-        normal_logger = logging.getLogger("trimesh.util")
-        previous_level = normal_logger.level
-        normal_logger.setLevel(logging.ERROR)
+    if len(before.vertices) <= 75_000:
         try:
-            n1 = np.asarray(before.vertex_normals)[sample_idx]
-            n2 = np.asarray(after.vertex_normals)[nearest]
-        finally:
-            normal_logger.setLevel(previous_level)
-        dots = np.clip(np.einsum("ij,ij->i", n1, n2), -1.0, 1.0)
-        mean_angle = float(np.degrees(np.arccos(dots)).mean())
-    except Exception:
-        pass
+            normal_logger = logging.getLogger("trimesh.util")
+            previous_level = normal_logger.level
+            normal_logger.setLevel(logging.ERROR)
+            try:
+                n1 = np.asarray(before.vertex_normals)[sample_idx]
+                n2 = np.asarray(after.vertex_normals)[nearest]
+            finally:
+                normal_logger.setLevel(previous_level)
+            dots = np.clip(np.einsum("ij,ij->i", n1, n2), -1.0, 1.0)
+            mean_angle = float(np.degrees(np.arccos(dots)).mean())
+        except Exception:
+            pass
     if maximum < 0.35 and (mean_angle is None or mean_angle < 8):
         visible = "low"
     elif maximum < 1.5 and (mean_angle is None or mean_angle < 25):

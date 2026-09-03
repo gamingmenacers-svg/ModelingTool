@@ -82,8 +82,29 @@ def run_pipeline(
     before = mesh_stats(original, context)
     say(f"Found {before.vertices:,} vertices and {before.triangles:,} triangles.")
 
-    cleaned = clean_mesh(original)
-    prepared = simplify_mesh(cleaned, target)
+    blender_status = detect_blender()
+    material = getattr(original.visual, "material", None)
+    has_texture = bool(
+        getattr(original.visual, "uv", None) is not None
+        and material is not None
+        and (
+            getattr(material, "baseColorTexture", None) is not None
+            or getattr(material, "image", None) is not None
+        )
+    )
+    if len(original.faces) > target and has_texture and blender_status.found:
+        say("Reducing triangles through Blender so UVs and the material texture remain intact...")
+        textured_input = job_dir / "intermediate" / "source_textured.glb"
+        textured_output = job_dir / "intermediate" / "decimated_textured.glb"
+        export_mesh(original, textured_input)
+        convert_with_blender(textured_input, textured_output, target_faces=target)
+        prepared, _prepared_context = load_mesh(textured_output)
+    elif len(original.faces) > target and has_texture:
+        say("Blender is unavailable, so triangle reduction was skipped rather than destroying the UV texture.")
+        prepared = original
+    else:
+        cleaned = clean_mesh(original)
+        prepared = simplify_mesh(cleaned, target)
     after = mesh_stats(prepared, context)
     say(f"Prepared base mesh: {after.triangles:,} triangles.")
     lods = make_lods(prepared, preset.lod_ratios)
@@ -113,7 +134,6 @@ def run_pipeline(
     artifacts["preview_before"] = job_dir / "preview_before.png"
     artifacts["preview_after"] = job_dir / "preview_after.png"
 
-    blender_status = detect_blender()
     game_info = inspect_game_install()
     reference_data: dict[str, object] = {}
     if reference_manifest and reference_manifest.is_file():

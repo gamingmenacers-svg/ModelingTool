@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -18,6 +20,14 @@ SUPPORTED_FORMATS = NATIVE_FORMATS | BLENDER_FORMATS
 
 class MeshImportError(RuntimeError):
     pass
+
+
+@dataclass
+class MeshPart:
+    """One selectable scene object with its material and node transform retained."""
+
+    name: str
+    mesh: trimesh.Trimesh
 
 
 def _material_names(mesh: trimesh.Trimesh) -> list[str]:
@@ -40,7 +50,7 @@ def _texture_references(mesh: trimesh.Trimesh) -> list[str]:
     return sorted(set(refs))
 
 
-def load_mesh(path: Path) -> tuple[trimesh.Trimesh, dict[str, int]]:
+def load_mesh_parts(path: Path) -> tuple[list[MeshPart], dict[str, int]]:
     path = path.expanduser().resolve()
     if not path.is_file():
         raise MeshImportError(f"Model does not exist: {path}")
@@ -65,10 +75,35 @@ def load_mesh(path: Path) -> tuple[trimesh.Trimesh, dict[str, int]]:
     else:
         raise MeshImportError(f"No triangle mesh was found in {path.name}.")
 
-    dumped = scene.dump()
-    meshes = [m for m in dumped if isinstance(m, trimesh.Trimesh) and len(m.faces)]
-    if not meshes:
+    parts: list[MeshPart] = []
+    geometry_uses = Counter(str(scene.graph[node_name][1]) for node_name in scene.graph.nodes_geometry)
+    for node_name in scene.graph.nodes_geometry:
+        transform, geometry_name = scene.graph[node_name]
+        source_mesh = scene.geometry.get(geometry_name)
+        if not isinstance(source_mesh, trimesh.Trimesh) or not len(source_mesh.faces):
+            continue
+        # A GLB may instance one geometry from several nodes. Avoid copying the
+        # very large embedded texture unless the actual geometry is reused.
+        mesh = source_mesh.copy() if geometry_uses[str(geometry_name)] > 1 else source_mesh
+        matrix = np.asarray(transform, dtype=float)
+        if not np.allclose(matrix, np.eye(4), rtol=0.0, atol=1e-12):
+            mesh.apply_transform(matrix)
+        display_name = str(node_name or geometry_name or f"piece {len(parts) + 1:02d}")
+        parts.append(MeshPart(display_name, mesh))
+    if not parts:
         raise MeshImportError(f"No triangle faces were found in {path.name}.")
+    context = {
+        "source_geometry_count": len(scene.geometry),
+        "transform_count": max(0, len(scene.graph.nodes_geometry) - len(scene.geometry)),
+    }
+    return parts, context
+
+
+def combine_mesh_parts(parts: Iterable[MeshPart]) -> trimesh.Trimesh:
+    part_list = list(parts)
+    if not part_list:
+        raise MeshImportError("No visible mesh pieces remain in the working scene.")
+    meshes = [part.mesh for part in part_list]
     combined = trimesh.util.concatenate(meshes)
     combined.metadata["source_material_names"] = sorted(
         set(name for mesh in meshes for name in _material_names(mesh))
@@ -76,26 +111,43 @@ def load_mesh(path: Path) -> tuple[trimesh.Trimesh, dict[str, int]]:
     combined.metadata["texture_references"] = sorted(
         set(ref for mesh in meshes for ref in _texture_references(mesh))
     )
-    context = {
-        "source_geometry_count": len(scene.geometry),
-        "transform_count": max(0, len(scene.graph.nodes_geometry) - len(scene.geometry)),
-    }
+    combined.metadata["source_part_names"] = [part.name for part in part_list]
+    combined.metadata["known_component_count"] = len(part_list)
+    return combined
+
+
+def load_mesh(path: Path) -> tuple[trimesh.Trimesh, dict[str, int]]:
+    parts, context = load_mesh_parts(path)
+    combined = combine_mesh_parts(parts)
     return combined, context
 
 
 def mesh_stats(mesh: trimesh.Trimesh, context: dict[str, int] | None = None) -> MeshStats:
     context = context or {}
     uv = getattr(mesh.visual, "uv", None)
-    normal_logger = logging.getLogger("trimesh.util")
-    previous_level = normal_logger.level
-    normal_logger.setLevel(logging.ERROR)
-    try:
-        normals = np.asarray(mesh.vertex_normals) if len(mesh.vertices) else np.empty((0, 3))
-    finally:
-        normal_logger.setLevel(previous_level)
+    # Trimesh falls back to a very slow Python sparse-normal path when SciPy is
+    # intentionally absent from the lightweight desktop build. Dense imports
+    # already carry renderable triangle normals, so don't block for minutes on
+    # a reporting-only vertex-normal check.
+    if len(mesh.vertices) > 75_000:
+        has_vertex_normals = bool(len(mesh.faces))
+    else:
+        normal_logger = logging.getLogger("trimesh.util")
+        previous_level = normal_logger.level
+        normal_logger.setLevel(logging.ERROR)
+        try:
+            normals = np.asarray(mesh.vertex_normals) if len(mesh.vertices) else np.empty((0, 3))
+        finally:
+            normal_logger.setLevel(previous_level)
+        has_vertex_normals = bool(len(normals) == len(mesh.vertices) and len(normals))
     source_materials = mesh.metadata.get("source_material_names", [])
     texture_refs = mesh.metadata.get("texture_references", [])
-    components = _component_count(np.asarray(mesh.faces, dtype=int), len(mesh.vertices))
+    known_components = mesh.metadata.get("known_component_count")
+    components = (
+        int(known_components)
+        if isinstance(known_components, (int, np.integer)) and int(known_components) > 0
+        else _component_count(np.asarray(mesh.faces, dtype=int), len(mesh.vertices))
+    )
     bounds = np.asarray(mesh.bounds, dtype=float)
     return MeshStats(
         vertices=int(len(mesh.vertices)),
@@ -108,7 +160,7 @@ def mesh_stats(mesh: trimesh.Trimesh, context: dict[str, int] | None = None) -> 
         bounds_center=np.round((bounds[0] + bounds[1]) / 2.0, 6).tolist(),
         watertight=bool(mesh.is_watertight),
         winding_consistent=bool(mesh.is_winding_consistent),
-        has_vertex_normals=bool(len(normals) == len(mesh.vertices) and len(normals)),
+        has_vertex_normals=has_vertex_normals,
         has_uv=bool(uv is not None and len(uv) == len(mesh.vertices)),
         has_tangents=False,
         texture_references=list(texture_refs),

@@ -20,10 +20,10 @@ def test_fbx_preview_uses_stable_cached_conversion(tmp_path: Path, monkeypatch) 
     source = tmp_path / "armour.fbx"
     source.write_bytes(b"synthetic test input")
     converted_source = create_sample(tmp_path / "converted-source.glb")
-    conversions: list[tuple[Path, Path]] = []
+    conversions: list[tuple[Path, Path, bool]] = []
 
-    def fake_convert(input_path: Path, output_path: Path) -> Path:
-        conversions.append((input_path, output_path))
+    def fake_convert(input_path: Path, output_path: Path, split_loose: bool = False) -> Path:
+        conversions.append((input_path, output_path, split_loose))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(converted_source.read_bytes())
         return output_path
@@ -33,6 +33,7 @@ def test_fbx_preview_uses_stable_cached_conversion(tmp_path: Path, monkeypatch) 
     second_mesh, second_path = load_preview_mesh(source, tmp_path / "cache")
 
     assert len(conversions) == 1
+    assert conversions[0][2] is True
     assert first_path == second_path
     assert first_path.suffix == ".glb"
     assert len(first_mesh.vertices) == len(second_mesh.vertices) > 0
