@@ -19,13 +19,24 @@ analysis = Analysis(
             "MSVCP140_1.dll",
             "MSVCP140_2.dll",
         )
+    ] + [
+        (str(plugin), f"PySide6/plugins/{plugin_group}")
+        for plugin_group in ("assetimporters", "sceneparsers")
+        for plugin in (qt_root / "plugins" / plugin_group).glob("*.dll")
     ],
     datas=[
         (str(package_root / "blender_bridge.py"), "bannerlord_model_forge"),
         (str(package_root / "blender_skeleton_preview.py"), "bannerlord_model_forge"),
         (str(package_root / "blender_skeleton_data.py"), "bannerlord_model_forge"),
+        (str(package_root / "material_viewport.qml"), "bannerlord_model_forge"),
     ],
-    hiddenimports=["fast_simplification", "networkx"],
+    hiddenimports=[
+        "fast_simplification",
+        "networkx",
+        "PySide6.QtQuick",
+        "PySide6.QtQuickWidgets",
+        "PySide6.QtQuick3D",
+    ],
     excludes=["pytest", "_pytest", "pytest_cov", "coverage", "pygments", "tkinterdnd2"],
     noarchive=False,
     optimize=0,

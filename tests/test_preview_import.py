@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bannerlord_model_forge.preview_import import load_preview_mesh
+from bannerlord_model_forge.preview_import import load_preview_asset, load_preview_mesh
 from bannerlord_model_forge.sample import create_sample
 
 
 def test_native_preview_loads_without_conversion(tmp_path: Path) -> None:
     source = create_sample(tmp_path / "preview.glb")
 
+    asset = load_preview_asset(source, tmp_path / "cache")
     mesh, displayed_path = load_preview_mesh(source, tmp_path / "cache")
 
     assert displayed_path == source.resolve()
+    assert asset.material_display_path is not None
+    assert asset.material_display_path.is_file()
     assert len(mesh.vertices) > 0
     assert len(mesh.faces) > 0
 

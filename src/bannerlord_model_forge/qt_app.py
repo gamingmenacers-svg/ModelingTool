@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import sys
@@ -9,7 +10,8 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QFont, QIcon, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QFont, QIcon, QPainter, QPen, QPolygonF, QSurfaceFormat
+from PySide6.QtQuick3D import QQuick3D
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -44,6 +46,8 @@ from .config import BONE_REGION_PATTERNS, PRESETS, project_root
 from .game_install import inspect_game_install
 from .gpu_viewport import RigViewport
 from .material_compiler import inspect_source_material
+from .material_preview import export_material_preview
+from .material_viewport import MaterialViewport
 from .mesh_io import MeshPart, export_mesh, load_mesh
 from .pipeline import run_pipeline
 from .preview_import import PreviewAsset, load_preview_asset
@@ -529,6 +533,7 @@ class ForgeStudio(QMainWindow):
         self.active_rig_part_name = ""
         self.output_dir: Path | None = None
         self.skeleton_data_path: Path | None = None
+        self.material_base_color_only = True
         self.signals = AppSignals()
         self.signals.log.connect(self._log)
         self.signals.preview_ready.connect(self._show_source_preview)
@@ -712,6 +717,20 @@ class ForgeStudio(QMainWindow):
         self.mode_compare.clicked.connect(self._toggle_compare)
         row.addWidget(self.mode_single)
         row.addWidget(self.mode_compare)
+        self.view_material = QToolButton()
+        self.view_material.setText("Material")
+        self.view_material.setCheckable(True)
+        self.view_material.setToolTip("Accurate source material rendered through Qt's glTF 2.0 pipeline")
+        self.view_material.clicked.connect(self._select_material_view)
+        self.view_rig = QToolButton()
+        self.view_rig.setText("Rig overlay")
+        self.view_rig.setCheckable(True)
+        self.view_rig.setChecked(True)
+        self.view_rig.setToolTip("Interactive selection, Bannerlord skeleton, weights, and wireframe")
+        self.view_rig.clicked.connect(self._select_rig_view)
+        row.addSpacing(12)
+        row.addWidget(self.view_material)
+        row.addWidget(self.view_rig)
         row.addSpacing(12)
         for text, view in (("Front", (0.0, 0.0)), ("Side", (1.5708, 0.0)), ("3/4", (0.38, -0.10)), ("Top", (0.0, -1.30))):
             button = QToolButton()
@@ -733,11 +752,6 @@ class ForgeStudio(QMainWindow):
         self.vertex_chip = muted("VERTICES —")
         self.face_chip = muted("TRIANGLES —")
         self.bone_chip = muted("BONES —")
-        row.addWidget(self.vertex_chip)
-        row.addSpacing(12)
-        row.addWidget(self.face_chip)
-        row.addSpacing(12)
-        row.addWidget(self.bone_chip)
         layout.addWidget(toolbar)
 
         middle = QSplitter(Qt.Orientation.Vertical)
@@ -748,7 +762,12 @@ class ForgeStudio(QMainWindow):
         self.viewport.render_error.connect(lambda message: self._log(f"GPU viewport error: {message}"))
         self.viewport.part_selected.connect(self._select_part_from_viewport)
         self.viewport.delete_requested.connect(self._remove_selected_parts)
-        middle.addWidget(self.viewport)
+        self.material_viewport = MaterialViewport()
+        self.material_viewport.render_error.connect(lambda message: self._log(f"Material viewport error: {message}"))
+        self.viewport_stack = QStackedWidget()
+        self.viewport_stack.addWidget(self.viewport)
+        self.viewport_stack.addWidget(self.material_viewport)
+        middle.addWidget(self.viewport_stack)
         console_frame = QFrame()
         console_layout = QVBoxLayout(console_frame)
         console_layout.setContentsMargins(0, 0, 0, 0)
@@ -915,9 +934,12 @@ class ForgeStudio(QMainWindow):
         layout.addSpacing(8)
         layout.addWidget(section_label("Material preview"))
         self.material_preview_combo = QComboBox()
-        self.material_preview_combo.addItem("Studio lighting — approximate", "studio_lit")
-        self.material_preview_combo.addItem("Base colour — exact source pixels", "base_color")
-        self.material_preview_combo.setToolTip("Base colour shows the embedded image without viewport lighting. Studio lighting adds an approximate material preview.")
+        self.material_preview_combo.addItem("Accurate material — glTF renderer", "accurate_material")
+        self.material_preview_combo.addItem("Rig overlay — studio lighting", "studio_lit")
+        self.material_preview_combo.addItem("Rig overlay — base colour", "base_color")
+        self.material_preview_combo.setToolTip(
+            "Accurate material uses Qt's maintained glTF renderer. Rig overlay modes remain available for bones, weights, and selection."
+        )
         self.material_preview_combo.currentIndexChanged.connect(self._material_preview_changed)
         layout.addWidget(self.material_preview_combo)
         self.material_source_status = muted(
@@ -1096,6 +1118,7 @@ class ForgeStudio(QMainWindow):
             label=self.source_path.name,
             preset_key=self.piece_combo.currentData(),
         )
+        self.material_viewport.set_model(asset.material_display_path or asset.display_path)
         materials = [getattr(part.mesh.visual, "material", None) for part in asset.parts]
         has_base_colour = any(
             getattr(material, "baseColorTexture", None) is not None
@@ -1111,13 +1134,21 @@ class ForgeStudio(QMainWindow):
             for material in materials
             if material is not None
         )
+        self.material_base_color_only = not has_pbr_support
         if has_base_colour and not has_pbr_support:
-            exact_index = self.material_preview_combo.findData("base_color")
+            exact_index = self.material_preview_combo.findData("accurate_material")
             self.material_preview_combo.setCurrentIndex(exact_index)
             self._log(
-                "This FBX supplies base colour only, so the viewport is showing exact source pixels by default. "
-                "Studio lighting remains available as an approximation."
+                "This FBX supplies base colour only. Accurate Material mode now renders the preserved atlas through "
+                "Qt's glTF pipeline; the rig overlay remains available for selection and bone inspection."
             )
+        elif has_base_colour:
+            self.material_preview_combo.setCurrentIndex(
+                self.material_preview_combo.findData("accurate_material")
+            )
+        else:
+            self.material_preview_combo.setCurrentIndex(self.material_preview_combo.findData("studio_lit"))
+        self._material_preview_changed()
         self.return_to_set_button.setVisible(False)
         self._refresh_scene_list()
         self.job_label.setText("READY TO ANALYZE")
@@ -1224,6 +1255,7 @@ class ForgeStudio(QMainWindow):
             self.material_source_status.setText(
                 "Select one piece to inspect every material map actually supplied by its FBX."
             )
+        self._refresh_material_preview()
 
     def _set_transform_controls_enabled(self, enabled: bool) -> None:
         for control in (
@@ -1282,6 +1314,7 @@ class ForgeStudio(QMainWindow):
             f"Auto-fit {part.name} to {self.piece_combo.currentText()} ({result.placement}); "
             f"confidence {result.confidence:.0%}, uniform scale ×{result.scale:.4g}. {result.note}"
         )
+        self._refresh_material_preview()
         return True
 
     def _rotate_selected_part(self, degrees: float) -> None:
@@ -1310,6 +1343,7 @@ class ForgeStudio(QMainWindow):
         axis_name = "XYZ"[axis]
         self.orientation_status.setText(f"{part.name} • rotated {degrees:g}° around {axis_name}")
         self._log(f"Rotated {part.name} {degrees:g}° around its {axis_name} axis. Auto-rig/export will use this orientation.")
+        self._refresh_material_preview()
 
     def _reset_selected_transform(self) -> None:
         if self.source_asset is None or self.preview_asset is not self.source_asset:
@@ -1323,6 +1357,7 @@ class ForgeStudio(QMainWindow):
         self.viewport.set_part_transform(index, part.transform)
         self.orientation_status.setText(f"{part.name} • imported orientation")
         self._log(f"Reset {part.name} to its imported orientation.")
+        self._refresh_material_preview()
 
     def _frame_selected_part(self) -> None:
         indices = self._selected_part_indices()
@@ -1379,6 +1414,7 @@ class ForgeStudio(QMainWindow):
             self.viewport.set_part_visible(index, False)
         self.viewport.set_selected_part(-1)
         self._refresh_scene_list()
+        self._refresh_material_preview()
         self._log(f"Removed {len(indices)} working-scene piece(s): {', '.join(names[:3])}{'…' if len(names) > 3 else ''}. Original file untouched.")
 
     def _restore_all_parts(self) -> None:
@@ -1389,6 +1425,7 @@ class ForgeStudio(QMainWindow):
         self.preview_asset = self.source_asset
         self.viewport.restore_all_parts()
         self._refresh_scene_list()
+        self._refresh_material_preview()
         if restored:
             self._log(f"Restored {restored} piece(s) from the in-memory import. Original file was never modified.")
 
@@ -1406,6 +1443,7 @@ class ForgeStudio(QMainWindow):
             self.viewport.set_part_visible(index, False)
         self.return_to_set_button.setVisible(False)
         self._refresh_scene_list()
+        self._refresh_material_preview()
         self.job_label.setText("READY TO ANALYZE")
 
     def _preview_failed(self, message: str) -> None:
@@ -1498,7 +1536,14 @@ class ForgeStudio(QMainWindow):
         self.output_dir = result.output_dir
         result_name = f"{self.active_rig_part_name} • rig result" if self.active_rig_part_name else "Prepared rig result"
         result_part = MeshPart(result_name, mesh)
-        self.preview_asset = PreviewAsset(self.source_path or result.artifacts["prepared_glb"], result.artifacts["prepared_glb"], [result_part])
+        result_preview = project_root() / "work" / "material-preview" / f"{result.output_dir.name}-result.glb"
+        export_material_preview([result_part], result_preview)
+        self.preview_asset = PreviewAsset(
+            self.source_path or result.artifacts["prepared_glb"],
+            result.artifacts["prepared_glb"],
+            [result_part],
+            result_preview,
+        )
         self.viewport.set_parts(
             [result_part],
             result.artifacts.get("skeleton_viewport_data", self.skeleton_data_path),
@@ -1508,6 +1553,7 @@ class ForgeStudio(QMainWindow):
         )
         self.return_to_set_button.setVisible(self.source_asset is not None and len(self.source_asset.parts) > 1)
         self._refresh_scene_list()
+        self._refresh_material_preview()
         self.forge_button.setEnabled(True)
         self.open_button.setEnabled(True)
         self.progress.setRange(0, 100)
@@ -1632,8 +1678,60 @@ class ForgeStudio(QMainWindow):
         self.viewport.wireframe = checked
         self.viewport.update()
 
+    def _refresh_material_preview(self) -> None:
+        if not hasattr(self, "material_preview_combo"):
+            return
+        if self.material_preview_combo.currentData() != "accurate_material":
+            return
+        asset = self.preview_asset
+        if asset is None:
+            self.material_viewport.set_model(None)
+            return
+        indices = self._selected_part_indices()
+        if len(indices) == 1 and 0 <= indices[0] < len(asset.parts):
+            index = indices[0]
+            part = asset.parts[index]
+            identity = (
+                f"{asset.source_path}|{index}|".encode("utf-8")
+                + np.asarray(part.transform, dtype=np.float64).tobytes()
+            )
+            key = hashlib.sha256(identity).hexdigest()[:16]
+            safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", asset.source_path.stem).strip("_.") or "model"
+            selected_preview = project_root() / "work" / "material-preview" / f"{safe_stem}-{index:03d}-{key}.glb"
+            if not selected_preview.is_file():
+                export_material_preview([part], selected_preview)
+            self.material_viewport.set_model(
+                selected_preview,
+                base_color_only=self.material_base_color_only,
+            )
+            return
+        if self.preview_asset is self.source_asset and self.removed_parts:
+            # A deleted item must never reappear in the accurate renderer.
+            self.material_viewport.set_model(None)
+            return
+        self.material_viewport.set_model(
+            asset.material_display_path or asset.display_path,
+            base_color_only=self.material_base_color_only,
+        )
+
     def _material_preview_changed(self) -> None:
-        self.viewport.set_material_lit(self.material_preview_combo.currentData() == "studio_lit")
+        mode = self.material_preview_combo.currentData()
+        accurate = mode == "accurate_material"
+        self.viewport.set_material_lit(mode == "studio_lit")
+        self.viewport_stack.setCurrentWidget(self.material_viewport if accurate else self.viewport)
+        self.view_material.setChecked(accurate)
+        self.view_rig.setChecked(not accurate)
+        self._refresh_material_preview()
+
+    def _select_material_view(self) -> None:
+        index = self.material_preview_combo.findData("accurate_material")
+        self.material_preview_combo.setCurrentIndex(index)
+        self._material_preview_changed()
+
+    def _select_rig_view(self) -> None:
+        index = self.material_preview_combo.findData("studio_lit")
+        self.material_preview_combo.setCurrentIndex(index)
+        self._material_preview_changed()
 
     def _texture_orientation_changed(self) -> None:
         self.viewport.set_uv_flip(self.texture_flip_u_check.isChecked(), self.texture_flip_v_check.isChecked())
@@ -1660,6 +1758,7 @@ class ForgeStudio(QMainWindow):
 
 
 def main() -> None:
+    QSurfaceFormat.setDefaultFormat(QQuick3D.idealSurfaceFormat())
     app = QApplication(sys.argv)
     app.setApplicationName("Bannerlord Model Forge")
     app.setStyle("Fusion")

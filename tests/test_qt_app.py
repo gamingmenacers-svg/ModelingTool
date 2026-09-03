@@ -113,10 +113,20 @@ def test_selected_piece_rotation_is_non_destructive_and_reaches_export_transform
         assert np.allclose(part.transform, np.eye(4))
         assert source.read_bytes() == b"source remains untouched"
 
-        window.material_preview_combo.setCurrentIndex(1)
+        window.material_preview_combo.setCurrentIndex(
+            window.material_preview_combo.findData("base_color")
+        )
         assert window.viewport.material_lit is False
-        window.material_preview_combo.setCurrentIndex(0)
+        assert window.viewport_stack.currentWidget() is window.viewport
+        window.material_preview_combo.setCurrentIndex(
+            window.material_preview_combo.findData("studio_lit")
+        )
         assert window.viewport.material_lit is True
+        window.material_preview_combo.setCurrentIndex(
+            window.material_preview_combo.findData("accurate_material")
+        )
+        assert window.viewport_stack.currentWidget() is window.material_viewport
+        assert window.material_viewport.source_path is not None
         window.texture_flip_v_check.setChecked(True)
         assert window.viewport.uv_flip_bits == 2
         assert "Base colour  not supplied" in window.material_source_status.text()

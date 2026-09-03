@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .blender_backend import convert_with_blender
+from .material_preview import export_material_preview
 from .mesh_io import MeshPart, combine_mesh_parts, load_mesh_parts
 
 
@@ -13,6 +14,7 @@ class PreviewAsset:
     source_path: Path
     display_path: Path
     parts: list[MeshPart]
+    material_display_path: Path | None = None
 
     def combined_mesh(self):
         return combine_mesh_parts(self.parts)
@@ -43,7 +45,13 @@ def load_preview_asset(source: Path, cache_root: Path) -> PreviewAsset:
     if generated_pieces:
         generated_pieces.sort(key=lambda value: value[0])
         parts = [part for _number, part in generated_pieces] + named_parts
-    return PreviewAsset(source, display_path, parts)
+    material_key = hashlib.sha256(
+        f"{display_path}|{display_path.stat().st_size}|{display_path.stat().st_mtime_ns}|qt-material-v1".encode("utf-8")
+    ).hexdigest()[:16]
+    material_display_path = cache_root.expanduser().resolve() / f"{source.stem}-{material_key}-material.glb"
+    if not material_display_path.is_file():
+        export_material_preview(parts, material_display_path)
+    return PreviewAsset(source, display_path, parts, material_display_path)
 
 
 def load_preview_mesh(source: Path, cache_root: Path):

@@ -47,7 +47,37 @@ def packaged_self_test(output_root: Path) -> int:
         return 1
 
 
+def packaged_material_self_test(model_path: Path, output_path: Path) -> int:
+    """Exercise the bundled QML/glTF renderer and save visual proof."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QSurfaceFormat
+    from PySide6.QtQuick3D import QQuick3D
+    from PySide6.QtWidgets import QApplication
+
+    from bannerlord_model_forge.material_viewport import MaterialViewport
+
+    QSurfaceFormat.setDefaultFormat(QQuick3D.idealSurfaceFormat())
+    app = QApplication.instance() or QApplication([])
+    viewport = MaterialViewport()
+    viewport.resize(900, 700)
+    viewport.set_model(model_path, base_color_only=True)
+    viewport.show()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def capture() -> None:
+        saved = viewport.grab().save(str(output_path), "PNG")
+        viewport.close()
+        app.exit(0 if saved else 1)
+
+    QTimer.singleShot(7000, capture)
+    return app.exec()
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--self-test":
         raise SystemExit(packaged_self_test(Path(sys.argv[2]).resolve()))
+    if len(sys.argv) >= 4 and sys.argv[1] == "--material-self-test":
+        raise SystemExit(
+            packaged_material_self_test(Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve())
+        )
     main()

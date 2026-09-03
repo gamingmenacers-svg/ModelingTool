@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QSurfaceFormat
+from PySide6.QtQuick3D import QQuick3D
 from PySide6.QtWidgets import QApplication
 
 from bannerlord_model_forge.blender_backend import convert_with_blender
@@ -19,7 +21,12 @@ def main() -> int:
     project_root = Path(__file__).resolve().parents[1]
     work = project_root / "work" / "preview-capture"
     capture_model = os.environ.get("BMF_CAPTURE_MODEL", "").strip()
-    output = project_root / "outputs" / ("piece-selection-preview.png" if capture_model else "gpu-studio-preview.png")
+    requested_output = os.environ.get("BMF_CAPTURE_OUTPUT", "").strip()
+    output = (
+        Path(requested_output).expanduser().resolve()
+        if requested_output
+        else project_root / "outputs" / ("piece-selection-preview.png" if capture_model else "gpu-studio-preview.png")
+    )
     skeleton_output = project_root / "outputs" / "official-skeleton-preview.png"
     work.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -35,6 +42,7 @@ def main() -> int:
         raise RuntimeError("Bannerlord human_skeleton.fbx was not found")
     skeleton_data, bone_count = load_bannerlord_skeleton(Path(game.human_skeleton_path), work / "skeleton-cache")
 
+    QSurfaceFormat.setDefaultFormat(QQuick3D.idealSurfaceFormat())
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
@@ -50,7 +58,7 @@ def main() -> int:
     window._refresh_scene_list()
     window._log(f"FBX displayed with {bone_count} exact bones from the installed Bannerlord rest rig.")
     if len(asset.parts) > 1:
-        requested_row = int(os.environ.get("BMF_CAPTURE_ROW", "3"))
+        requested_row = int(os.environ.get("BMF_CAPTURE_ROW", "0"))
         selected_row = min(max(0, requested_row), len(asset.parts) - 1)
         window._select_part_from_viewport(selected_row)
         if os.environ.get("BMF_CAPTURE_AUTOFIT") == "1":
@@ -65,6 +73,7 @@ def main() -> int:
         if not pixmap.save(str(output), "PNG"):
             app.exit(1)
             return
+        window._select_rig_view()
         window.source_path = None
         window.source_asset = None
         window.preview_asset = None
@@ -83,7 +92,7 @@ def main() -> int:
 
         QTimer.singleShot(500, capture_skeleton)
 
-    QTimer.singleShot(1800, capture)
+    QTimer.singleShot(5000, capture)
     return app.exec()
 
 
