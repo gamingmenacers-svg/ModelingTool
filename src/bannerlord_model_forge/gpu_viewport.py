@@ -23,6 +23,7 @@ from .config import BONE_REGION_PATTERNS, PRESETS
 GL_FLOAT = 0x1406
 GL_TRIANGLES = 0x0004
 GL_LINES = 0x0001
+GL_POINTS = 0x0000
 GL_DEPTH_TEST = 0x0B71
 GL_MULTISAMPLE = 0x809D
 GL_FRONT_AND_BACK = 0x0408
@@ -278,6 +279,29 @@ class RigViewport(QOpenGLWidget):
         )
         self.set_view(math.radians(22.0), math.radians(7.0))
 
+    def set_skeleton_data(self, skeleton_path: Path, preset_key: str | None = None) -> None:
+        """Display an extracted rest rig independently of mesh processing."""
+        payload = json.loads(skeleton_path.read_text(encoding="utf-8"))
+        self.skeleton = list(payload.get("bones", []))
+        if self.mesh is None:
+            self.label = "OFFICIAL BANNERLORD REST RIG • LINKED"
+        self.focus_patterns = (
+            BONE_REGION_PATTERNS.get(PRESETS[preset_key].skeleton_region, ())
+            if preset_key in PRESETS
+            else ()
+        )
+        self._prepare_cpu_geometry()
+        self._upload_if_ready()
+        self.statistics_changed.emit(
+            {
+                "vertices": len(self.mesh.vertices) if self.mesh is not None else 0,
+                "triangles": len(self.mesh.faces) if self.mesh is not None else 0,
+                "bones": len(self.skeleton),
+                "weights": bool(self.weights),
+            }
+        )
+        self.update()
+
     def clear(self) -> None:
         self.mesh = None
         self.skeleton = []
@@ -372,39 +396,62 @@ class RigViewport(QOpenGLWidget):
         self.update()
 
     def _prepare_cpu_geometry(self) -> None:
-        if self.mesh is None or not len(self.mesh.faces):
+        if self.mesh is None and not self.skeleton:
             return
-        vertices = np.asarray(self.mesh.vertices, dtype=np.float64)
-        faces = np.asarray(self.mesh.faces, dtype=np.uint32)
-        extents = np.ptp(vertices, axis=0)
+        skeleton_points = np.asarray(
+            [bone.get("head", (0.0, 0.0, 0.0)) for bone in self.skeleton],
+            dtype=np.float64,
+        )
+        if len(skeleton_points):
+            reference = skeleton_points
+        else:
+            reference = np.asarray(self.mesh.vertices, dtype=np.float64)
+        extents = np.ptp(reference, axis=0)
         up_axis = int(np.argmax(extents))
         horizontal = [axis for axis in range(3) if axis != up_axis]
         horizontal.sort(key=lambda axis: extents[axis], reverse=True)
         self._axis_order = [horizontal[0], up_axis, horizontal[1]]
-        aligned = vertices[:, self._axis_order]
-        minimum = aligned.min(axis=0)
-        maximum = aligned.max(axis=0)
+        aligned_reference = reference[:, self._axis_order]
+        minimum = aligned_reference.min(axis=0)
+        maximum = aligned_reference.max(axis=0)
         self._normalization_origin = np.asarray(((minimum[0] + maximum[0]) * 0.5, minimum[1], (minimum[2] + maximum[2]) * 0.5))
         height = max(float(maximum[1] - minimum[1]), 1e-6)
         self._normalization_scale = 2.0 / height
-        positions = ((aligned - self._normalization_origin) * self._normalization_scale).astype(np.float32)
-        self._model_height = max(float(np.ptp(positions[:, 1])), 0.25)
-        self._model_width = max(float(np.ptp(positions[:, 0])), 0.25)
+        normalized_reference = (aligned_reference - self._normalization_origin) * self._normalization_scale
+        self._model_height = max(float(np.ptp(normalized_reference[:, 1])), 0.25)
+        self._model_width = max(float(np.ptp(normalized_reference[:, 0])), 0.25)
 
-        normals = _crease_aware_normals(aligned, np.asarray(self.mesh.faces, dtype=int))
-        colors = _neutral_vertex_colors(self.mesh, len(vertices))
-        weights = np.zeros((len(vertices), 1), dtype=np.float32)
-        if self.selected_bone and len(self.weights) == len(vertices):
-            weights[:, 0] = np.asarray([float(row.get(self.selected_bone, 0.0)) for row in self.weights], dtype=np.float32)
-        per_vertex = np.column_stack((positions, normals, colors, weights)).astype(np.float32)
-        self._mesh_interleaved = per_vertex[faces.reshape(-1)].copy()
+        if self.mesh is not None and len(self.mesh.faces):
+            vertices = np.asarray(self.mesh.vertices, dtype=np.float64)
+            faces = np.asarray(self.mesh.faces, dtype=np.uint32)
+            aligned = vertices[:, self._axis_order]
+            positions = ((aligned - self._normalization_origin) * self._normalization_scale).astype(np.float32)
+            normals = _crease_aware_normals(aligned, np.asarray(self.mesh.faces, dtype=int))
+            colors = _neutral_vertex_colors(self.mesh, len(vertices))
+            weights = np.zeros((len(vertices), 1), dtype=np.float32)
+            if self.selected_bone and len(self.weights) == len(vertices):
+                weights[:, 0] = np.asarray([float(row.get(self.selected_bone, 0.0)) for row in self.weights], dtype=np.float32)
+            per_vertex = np.column_stack((positions, normals, colors, weights)).astype(np.float32)
+            self._mesh_interleaved = per_vertex[faces.reshape(-1)].copy()
+        else:
+            self._mesh_interleaved = np.empty((0, 10), dtype=np.float32)
 
         skeleton_rows: list[np.ndarray] = []
+        heads = {str(bone.get("name", "")): np.asarray(bone.get("head", [0.0, 0.0, 0.0]), dtype=float) for bone in self.skeleton}
         for bone in self.skeleton:
             name = str(bone.get("name", "")).lower()
             focused = not self.focus_patterns or any(pattern in name for pattern in self.focus_patterns)
-            for field in ("head", "tail"):
-                point = np.asarray(bone.get(field, [0.0, 0.0, 0.0]), dtype=float)[self._axis_order]
+            parent = heads.get(str(bone.get("parent", "")))
+            endpoints = (
+                (parent, np.asarray(bone.get("head", [0.0, 0.0, 0.0]), dtype=float))
+                if parent is not None
+                else (
+                    np.asarray(bone.get("head", [0.0, 0.0, 0.0]), dtype=float),
+                    np.asarray(bone.get("tail", [0.0, 0.0, 0.0]), dtype=float),
+                )
+            )
+            for point_value in endpoints:
+                point = point_value[self._axis_order]
                 position = (point - self._normalization_origin) * self._normalization_scale
                 skeleton_rows.append(
                     np.asarray((*position, 0.0, 1.0, 0.0, 1.0, 0.27, 0.10, 1.0 if focused else 0.0), dtype=np.float32)
@@ -549,13 +596,15 @@ class RigViewport(QOpenGLWidget):
         self._program.setUniformValue("u_mode", 2)
         self._program.setUniformValue("u_heatmap", False)
         self._gl.glDisable(GL_DEPTH_TEST)
-        self._gl.glLineWidth(2.2)
+        self._gl.glLineWidth(3.0)
         self._skeleton_vao.bind()
         for offset in self._model_offsets():
             model = QMatrix4x4()
             model.translate(offset, 0.0, 0.0)
             self._program.setUniformValue("u_model", model)
             self._gl.glDrawArrays(GL_LINES, 0, self._skeleton_vertex_count)
+            self._gl.glPointSize(7.0)
+            self._gl.glDrawArrays(GL_POINTS, 0, self._skeleton_vertex_count)
         self._skeleton_vao.release()
         self._gl.glEnable(GL_DEPTH_TEST)
 
@@ -572,7 +621,7 @@ class RigViewport(QOpenGLWidget):
         painter.setFont(font)
         painter.drawText(QRectF(25, 14, 188, 30), Qt.AlignmentFlag.AlignVCenter, self.label[:30])
 
-        if self.mesh is None:
+        if self.mesh is None and not self.skeleton:
             painter.setPen(QPen(QColor("#334358"), 1))
             painter.setBrush(QColor(11, 17, 25, 225))
             box = QRectF(self.width() / 2 - 185, self.height() / 2 - 72, 370, 144)
@@ -591,7 +640,7 @@ class RigViewport(QOpenGLWidget):
                 "Drop an FBX, GLB or OBJ. FBX is converted read-only through Blender and appears here automatically.",
             )
         else:
-            status = "GPU • SMOOTH SHADED"
+            status = "OFFICIAL REST RIG • EXACT 31-BONE HIERARCHY" if self.mesh is None else "GPU • SMOOTH SHADED"
             if self.selected_bone:
                 status = f"WEIGHT HEATMAP • {self.selected_bone[:25]}"
             painter.setPen(Qt.PenStyle.NoPen)
@@ -600,4 +649,10 @@ class RigViewport(QOpenGLWidget):
             painter.drawRoundedRect(QRectF(self.width() - width - 14, self.height() - 44, width, 30), 6, 6)
             painter.setPen(QColor("#66b3ff") if not self.selected_bone else QColor("#ffbd4b"))
             painter.drawText(QRectF(self.width() - width, self.height() - 44, width - 20, 30), Qt.AlignmentFlag.AlignVCenter, status)
+
+            painter.setPen(QColor("#718095"))
+            font.setPointSize(8)
+            font.setWeight(QFont.Weight.Medium)
+            painter.setFont(font)
+            painter.drawText(QRectF(18, self.height() - 42, 210, 24), Qt.AlignmentFlag.AlignVCenter, "LMB  ORBIT    •    WHEEL  ZOOM")
         painter.end()

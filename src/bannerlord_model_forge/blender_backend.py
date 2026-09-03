@@ -135,3 +135,35 @@ def render_skeleton_overlay(
     if not data_path.is_file():
         raise RuntimeError("Blender rendered the skeleton preview but did not write its viewport data.")
     return destination, data_path
+
+
+def extract_skeleton_data(
+    skeleton_fbx: Path,
+    destination: Path,
+    scale: float = 1.0,
+) -> Path:
+    """Extract exact rest-pose bones from a local FBX into viewport JSON."""
+    status = detect_blender()
+    if not status.found or not status.executable:
+        raise RuntimeError(status.note)
+    extractor = Path(__file__).with_name("blender_skeleton_data.py")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        status.executable,
+        "--background",
+        "--factory-startup",
+        "--python",
+        str(extractor),
+        "--",
+        "--skeleton",
+        str(skeleton_fbx.resolve()),
+        "--output",
+        str(destination.resolve()),
+        "--scale",
+        str(scale),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=300, check=False)
+    if completed.returncode != 0 or not destination.is_file():
+        detail = (completed.stderr or completed.stdout)[-4000:]
+        raise RuntimeError(f"Skeleton extraction failed: {detail.strip()}")
+    return destination

@@ -10,6 +10,7 @@ $Executable = Join-Path $DistRoot 'Bannerlord Model Forge.exe'
 $EntryPoint = Join-Path $ProjectRoot 'src\bannerlord_model_forge\exe_entry.py'
 $BlenderBridge = Join-Path $ProjectRoot 'src\bannerlord_model_forge\blender_bridge.py'
 $SkeletonPreview = Join-Path $ProjectRoot 'src\bannerlord_model_forge\blender_skeleton_preview.py'
+$SkeletonData = Join-Path $ProjectRoot 'src\bannerlord_model_forge\blender_skeleton_data.py'
 $QtRuntimeRoot = Join-Path $ProjectRoot '.venv\Lib\site-packages\PySide6'
 
 if (-not (Test-Path -LiteralPath $VenvPython)) {
@@ -63,6 +64,7 @@ try {
         --add-binary "$(Join-Path $QtRuntimeRoot 'MSVCP140_2.dll');." `
         --add-data "$BlenderBridge;bannerlord_model_forge" `
         --add-data "$SkeletonPreview;bannerlord_model_forge" `
+        --add-data "$SkeletonData;bannerlord_model_forge" `
         --distpath $DistRoot `
         --workpath (Join-Path $BuildRoot 'build') `
         --specpath $BuildRoot `

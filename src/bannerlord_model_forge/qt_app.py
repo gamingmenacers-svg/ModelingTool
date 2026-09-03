@@ -44,6 +44,7 @@ from .mesh_io import load_mesh
 from .pipeline import run_pipeline
 from .preview_import import load_preview_mesh
 from .sample import create_sample
+from .skeleton_import import load_bannerlord_skeleton
 
 
 APP_STYLE = """
@@ -52,13 +53,13 @@ APP_STYLE = """
     font-size: 13px;
     color: #dce3ec;
 }
-QMainWindow, QWidget#Root { background: #0d1016; }
-QFrame#TopBar { background: #121721; border-bottom: 1px solid #252d3a; }
-QFrame#LeftRail, QFrame#Inspector { background: #11161f; }
+QMainWindow, QWidget#Root { background: #090d13; }
+QFrame#TopBar { background: #101620; border-bottom: 1px solid #263244; }
+QFrame#LeftRail, QFrame#Inspector { background: #0e141d; }
 QFrame#LeftRail { border-right: 1px solid #252d3a; }
 QFrame#Inspector { border-left: 1px solid #252d3a; }
-QFrame#Card { background: #171d27; border: 1px solid #293242; border-radius: 9px; }
-QFrame#DropCard { background: #141b26; border: 1px dashed #3d526d; border-radius: 10px; }
+QFrame#Card { background: #141c27; border: 1px solid #293649; border-radius: 11px; }
+QFrame#DropCard { background: #111a26; border: 1px dashed #3b5878; border-radius: 12px; }
 QFrame#DropCard[active="true"] { background: #17273a; border: 1px solid #5aa9ff; }
 QFrame#StatusGood { background: #13271f; border: 1px solid #25523f; border-radius: 13px; }
 QFrame#StatusWarn { background: #2b2416; border: 1px solid #604b25; border-radius: 13px; }
@@ -71,7 +72,7 @@ QLabel#Good { color: #6ed6a5; }
 QLabel#Warning { color: #f5bd68; }
 QPushButton, QToolButton {
     background: #1b2330; border: 1px solid #303b4d; border-radius: 6px;
-    padding: 7px 11px; color: #dce3ec;
+    padding: 8px 12px; color: #dce3ec;
 }
 QPushButton:hover, QToolButton:hover { background: #253044; border-color: #506178; }
 QPushButton:pressed, QToolButton:pressed { background: #18202c; }
@@ -98,9 +99,10 @@ QScrollArea > QWidget > QWidget { background: #11161f; }
 QScrollBar:vertical { background: #10151d; width: 8px; }
 QScrollBar::handle:vertical { background: #354052; border-radius: 4px; min-height: 32px; }
 QTextEdit#Console { background: #0a0d12; border: none; color: #9eabbc; font-family: "Cascadia Mono"; font-size: 11px; }
-QListWidget { background: transparent; border: none; outline: none; }
-QListWidget::item { padding: 7px 4px; border-radius: 4px; }
+QListWidget { background: #0b1119; border: 1px solid #222e3e; border-radius: 8px; outline: none; padding: 5px; }
+QListWidget::item { padding: 8px 6px; border-radius: 5px; }
 QListWidget::item:selected { background: #1d2d42; color: #81bcfb; }
+QToolTip { background: #171d27; color: #e7edf5; border: 1px solid #3a4659; padding: 6px; }
 QProgressBar { background: #0d1219; border: 1px solid #2a3443; border-radius: 4px; height: 7px; text-align: center; }
 QProgressBar::chunk { background: #4599ef; border-radius: 3px; }
 QCheckBox::indicator { width: 16px; height: 16px; }
@@ -474,12 +476,14 @@ class AppSignals(QObject):
     log = Signal(str)
     preview_ready = Signal(object)
     preview_failed = Signal(str)
+    skeleton_ready = Signal(object)
+    skeleton_failed = Signal(str)
     finished = Signal(object)
     failed = Signal(str)
 
 
 class ForgeStudio(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, load_official_skeleton: bool = True) -> None:
         super().__init__()
         self.setWindowTitle("Bannerlord Model Forge — Rigging Studio")
         self.resize(1520, 940)
@@ -487,16 +491,25 @@ class ForgeStudio(QMainWindow):
         self.setAcceptDrops(True)
         self.source_path: Path | None = None
         self.output_dir: Path | None = None
+        self.skeleton_data_path: Path | None = None
         self.signals = AppSignals()
         self.signals.log.connect(self._log)
         self.signals.preview_ready.connect(self._show_source_preview)
         self.signals.preview_failed.connect(self._preview_failed)
+        self.signals.skeleton_ready.connect(self._skeleton_ready)
+        self.signals.skeleton_failed.connect(self._skeleton_failed)
         self.signals.finished.connect(self._pipeline_finished)
         self.signals.failed.connect(self._pipeline_failed)
         self.game = inspect_game_install()
         self.blender = detect_blender()
         self._build()
         self._log("Studio ready. Source and TaleWorlds files are always read-only.")
+        if load_official_skeleton and self.game.human_skeleton_path and self.blender.found:
+            self._log("Linking the official Bannerlord rest-pose skeleton…")
+            threading.Thread(target=self._skeleton_worker, daemon=True).start()
+        elif load_official_skeleton and self.game.human_skeleton_path:
+            self.skeleton_status.setText("DETECTED • BLENDER REQUIRED")
+            self.skeleton_detail.setText("Install or connect Blender to read the official FBX rest hierarchy.")
 
     def _build(self) -> None:
         root = QWidget()
@@ -532,7 +545,7 @@ class ForgeStudio(QMainWindow):
         title = QLabel("Bannerlord Model Forge")
         title.setObjectName("Title")
         title_stack.addWidget(title)
-        title_stack.addWidget(muted("ARMOUR RIGGING STUDIO"))
+        title_stack.addWidget(muted("BANNERLORD RIGGING WORKSPACE"))
         layout.addWidget(logo)
         layout.addLayout(title_stack)
         layout.addSpacing(20)
@@ -572,15 +585,19 @@ class ForgeStudio(QMainWindow):
         self.drop_card.browse_requested.connect(self._browse_source)
         self.drop_card.file_selected.connect(self._set_source)
         layout.addWidget(self.drop_card)
-        sample = QPushButton("Load original mannequin sample")
+        sample = QPushButton("Open generated fit-test mesh")
         sample.setObjectName("Quiet")
+        sample.setToolTip("Generated test geometry only — this is not a Bannerlord body or skeleton.")
         sample.clicked.connect(self._load_sample)
         layout.addWidget(sample)
         layout.addSpacing(7)
-        layout.addWidget(section_label("Asset collection"))
+        layout.addWidget(section_label("Scene outliner"))
         self.asset_list = QListWidget()
-        self.asset_list.setMinimumHeight(96)
-        placeholder = QListWidgetItem("No imported assets")
+        self.asset_list.setMinimumHeight(112)
+        self.asset_list.setMaximumHeight(164)
+        self.asset_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.asset_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        placeholder = QListWidgetItem("Preparing linked Bannerlord rig…")
         placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
         self.asset_list.addItem(placeholder)
         layout.addWidget(self.asset_list)
@@ -760,10 +777,11 @@ class ForgeStudio(QMainWindow):
         skeleton_layout = QVBoxLayout()
         skeleton_layout.setContentsMargins(12, 11, 12, 11)
         skeleton_layout.addWidget(QLabel("Bannerlord human skeleton"))
-        skeleton_status = QLabel("READ-ONLY • DETECTED" if self.game.human_skeleton_found else "NOT DETECTED")
-        skeleton_status.setObjectName("Good" if self.game.human_skeleton_found else "Warning")
-        skeleton_layout.addWidget(skeleton_status)
-        skeleton_layout.addWidget(muted("The installed TaleWorlds FBX is referenced in place and never copied or modified.", True))
+        self.skeleton_status = QLabel("DETECTED • LOADING REST RIG" if self.game.human_skeleton_found else "NOT DETECTED")
+        self.skeleton_status.setObjectName("Good" if self.game.human_skeleton_found else "Warning")
+        skeleton_layout.addWidget(self.skeleton_status)
+        self.skeleton_detail = muted("Loading exact bones from the installed TaleWorlds FBX. The source remains read-only.", True)
+        skeleton_layout.addWidget(self.skeleton_detail)
         layout.addWidget(card(skeleton_layout))
         layout.addStretch(1)
         return scroll
@@ -838,9 +856,9 @@ class ForgeStudio(QMainWindow):
             self.reference_edit.setText(path)
 
     def _load_sample(self) -> None:
-        path = create_sample(project_root() / "work" / "samples" / "studio_training_cuirass.glb")
+        path = create_sample(project_root() / "work" / "samples" / "generated_fit_test.glb")
         self._set_source(str(path))
-        self._log("Loaded an original generated cuirass sample; no game mesh was copied.")
+        self._log("Loaded generated fit-test geometry. It is not a Bannerlord body; the orange rig is the official local skeleton.")
 
     def _set_source(self, value: str) -> None:
         path = Path(value).expanduser().resolve()
@@ -854,8 +872,7 @@ class ForgeStudio(QMainWindow):
         self.output_dir = None
         self.open_button.setEnabled(False)
         self.drop_card.set_path(path)
-        self.asset_list.clear()
-        self.asset_list.addItem("◆  " + path.name)
+        self._refresh_scene_list()
         self.workflow_labels[0].setText("Import mesh  •  ready")
         self.workflow_labels[0].setStyleSheet("color:#6ed6a5;")
         self.job_label.setText("LOADING PREVIEW")
@@ -875,8 +892,53 @@ class ForgeStudio(QMainWindow):
 
     def _show_source_preview(self, payload: object) -> None:
         mesh, name = payload  # type: ignore[misc]
-        self.viewport.set_model(mesh, label=name)
+        self.viewport.set_model(
+            mesh,
+            self.skeleton_data_path,
+            label=name,
+            preset_key=self.piece_combo.currentData(),
+        )
         self.job_label.setText("READY TO ANALYZE")
+
+    def _skeleton_worker(self) -> None:
+        try:
+            assert self.game.human_skeleton_path is not None
+            data_path, bone_count = load_bannerlord_skeleton(
+                Path(self.game.human_skeleton_path),
+                project_root() / "work" / "skeleton-cache",
+            )
+            self.signals.skeleton_ready.emit((data_path, bone_count))
+        except Exception as exc:
+            self.signals.skeleton_failed.emit(str(exc))
+
+    def _skeleton_ready(self, payload: object) -> None:
+        data_path, bone_count = payload  # type: ignore[misc]
+        self.skeleton_data_path = Path(data_path)
+        self.viewport.set_skeleton_data(self.skeleton_data_path, self.piece_combo.currentData())
+        self.skeleton_status.setText(f"LIVE • {bone_count} OFFICIAL BONES")
+        self.skeleton_detail.setText("Exact rest hierarchy from the installed human_skeleton.fbx; referenced read-only.")
+        self.bone_chip.setText(f"BONES  {bone_count:,}")
+        self._refresh_scene_list()
+        self._log(f"Official Bannerlord human_skeleton.fbx loaded • {bone_count} exact rest-pose bones.")
+
+    def _skeleton_failed(self, message: str) -> None:
+        self.skeleton_status.setText("RIG LOAD FAILED")
+        self.skeleton_status.setObjectName("Warning")
+        self.skeleton_status.style().unpolish(self.skeleton_status)
+        self.skeleton_status.style().polish(self.skeleton_status)
+        self.skeleton_detail.setText(message)
+        self._log("Official skeleton unavailable: " + message)
+
+    def _refresh_scene_list(self) -> None:
+        self.asset_list.clear()
+        if self.source_path is not None:
+            self.asset_list.addItem("◇  MESH   " + self.source_path.name)
+        if self.skeleton_data_path is not None:
+            self.asset_list.addItem("⟠  RIG      human_skeleton.fbx  [linked]")
+        if self.asset_list.count() == 0:
+            placeholder = QListWidgetItem("Waiting for mesh and official rig…")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.asset_list.addItem(placeholder)
 
     def _preview_failed(self, message: str) -> None:
         self.job_label.setText("IMPORT FAILED")
@@ -889,6 +951,8 @@ class ForgeStudio(QMainWindow):
         self.guidance.setText(preset.guidance)
         self.workflow_labels[1].setText(f"Classify piece  •  {preset.label}")
         self.workflow_labels[1].setStyleSheet("color:#6ed6a5;")
+        if self.skeleton_data_path is not None:
+            self.viewport.set_skeleton_data(self.skeleton_data_path, self.piece_combo.currentData())
 
     def _start_pipeline(self) -> None:
         if self.source_path is None or not self.source_path.is_file():
@@ -927,7 +991,7 @@ class ForgeStudio(QMainWindow):
         self.output_dir = result.output_dir
         self.viewport.set_model(
             mesh,
-            result.artifacts.get("skeleton_viewport_data"),
+            result.artifacts.get("skeleton_viewport_data", self.skeleton_data_path),
             result.artifacts.get("skin_weights"),
             "Prepared equipped fit",
             result.preset_key,

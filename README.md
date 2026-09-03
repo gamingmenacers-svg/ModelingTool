@@ -25,7 +25,7 @@ You need Windows, Python 3.11 or newer, and an internet connection for first-tim
    .\scripts\Start.ps1
    ```
 
-3. Drop a model into the workspace rail, or click **Load original mannequin sample**.
+3. Drop a model into the workspace rail, or click **Open generated fit-test mesh** (clearly labelled test geometry, not a game character).
 4. Choose the exact piece: helmet, torso clothing/armour, pauldrons, gloves/bracers, cape, skirt/tassets, boots/greaves, shield, or weapon.
 5. Click **Analyze and prepare**.
 6. Click **Open result folder** and start with `validation_report.md`.
@@ -54,7 +54,7 @@ The centre of the app is a hardware-accelerated OpenGL fitting viewport, with as
 - see the relevant bone region highlighted for the selected armour piece;
 - select any weighted bone to display a per-vertex weight heatmap.
 
-The app uses Bannerlord's locally installed human skeleton read-only. It generates visual overlay data and renders, but never copies or redistributes the FBX itself.
+On launch, the app uses Blender to read the locally installed `human_skeleton.fbx` and caches only its rest-pose joint data. The viewport displays the exact 31-bone Bannerlord hierarchy immediately, including the original `bip01_*` names and joint positions. Imported armour is normalized against that rig—not against a fake mannequin—so incorrect scale, origin, orientation, or bind-pose alignment is visible before auto-rigging. The source FBX stays in place and is never copied or modified.
 
 The stage uses smooth vertex normals, a depth buffer, multisample antialiasing, an original checker/matte floor, and cool-key, cool-rim, warm-fill studio lighting informed by the Modding Kit's readable character-preview scene definitions. It does not redistribute TaleWorlds scene or character assets.
 
@@ -165,6 +165,7 @@ Tests cover deterministic mesh processing, non-destructive source handling, cach
 ## Current limitations
 
 - Native FBX parsing is deliberately not attempted; it routes through Blender.
+- The Modding Kit exposes the official skeleton as FBX, but not an unpacked reusable human body mesh in `modding_resources`. The app therefore shows the exact local armature and the user's armour; it does not extract or redistribute packed TaleWorlds character bodies.
 - Reference-transferred skinned FBX export requires a matching skeleton path in the reference bundle; the app will not invent one.
 - Proximity auto-weights are a reviewable fallback, not a replacement for a close-fitting weighted armour template.
 - The viewport is a focused inspection/weighting workspace, not a general-purpose modelling replacement for every Blender operation.

@@ -40,8 +40,20 @@ class SkeletonProximityRiggingBackend(RiggingBackend):
         ]
         if not focused:
             raise ValueError("No Bannerlord bones matched this armour-piece region.")
-        heads = np.asarray([record["head"] for record in focused], dtype=float)
-        tails = np.asarray([record["tail"] for record in focused], dtype=float)
+        heads_by_name = {str(record.get("name", "")): record["head"] for record in indexed}
+        # Bannerlord's FBX uses bone tails partly as orientation handles. For
+        # anatomical proximity, the meaningful deforming span is the parent
+        # joint to this joint; retain head-to-tail only for roots/legacy data.
+        segment_pairs = []
+        for record in focused:
+            parent_head = heads_by_name.get(str(record.get("parent", "")))
+            segment_pairs.append(
+                (parent_head, record["head"])
+                if parent_head is not None
+                else (record["head"], record["tail"])
+            )
+        heads = np.asarray([pair[0] for pair in segment_pairs], dtype=float)
+        tails = np.asarray([pair[1] for pair in segment_pairs], dtype=float)
         names = [str(record["name"]) for record in focused]
         vertices = np.asarray(request.mesh.vertices, dtype=float)
         influence_count = min(request.max_influences, len(focused))
@@ -65,10 +77,7 @@ class SkeletonProximityRiggingBackend(RiggingBackend):
                 )
             nearest_distances.append(chosen[:, 0])
         nearest = np.concatenate(nearest_distances)
-        all_points = np.asarray(
-            [point for record in indexed for point in (record["head"], record["tail"])],
-            dtype=float,
-        )
+        all_points = np.concatenate((heads, tails), axis=0)
         skeleton_height = max(float(np.ptp(all_points, axis=0).max()), 1e-9)
         p95_ratio = float(np.percentile(nearest, 95)) / skeleton_height
         confidence = max(0.05, min(0.55, 0.55 - p95_ratio))

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from bannerlord_model_forge.blender_backend import convert_with_blender, detect_blender
+from bannerlord_model_forge.blender_backend import convert_with_blender, detect_blender, extract_skeleton_data
 from bannerlord_model_forge.mesh_io import load_mesh
 from bannerlord_model_forge.pipeline import run_pipeline
 from bannerlord_model_forge.preview_import import load_preview_mesh
@@ -83,3 +83,38 @@ def test_generated_fbx_imports_into_immediate_preview(tmp_path: Path) -> None:
     assert preview_path.suffix == ".glb"
     assert len(mesh.vertices) > 0
     assert len(mesh.faces) > 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("BMF_RUN_BLENDER_TESTS") != "1",
+    reason="set BMF_RUN_BLENDER_TESTS=1 to run the installed-Blender integration test",
+)
+def test_rest_pose_bones_are_extracted_from_fbx(tmp_path: Path) -> None:
+    blender = detect_blender()
+    if not blender.found or not blender.executable:
+        pytest.skip("Blender is not installed")
+    project_root = Path(__file__).resolve().parents[1]
+    skeleton = tmp_path / "test_skeleton.fbx"
+    completed = subprocess.run(
+        [
+            blender.executable,
+            "--background",
+            "--factory-startup",
+            "--python",
+            str(project_root / "scripts" / "blender_make_test_skeleton.py"),
+            "--",
+            "--output",
+            str(skeleton),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+    data_path = extract_skeleton_data(skeleton, tmp_path / "rest-rig.json")
+    payload = json.loads(data_path.read_text(encoding="utf-8"))
+
+    assert payload["bone_count"] == 2
+    assert [bone["name"] for bone in payload["bones"]] == ["root_0", "tip_1"]
