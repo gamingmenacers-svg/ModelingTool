@@ -14,6 +14,7 @@ from .blender_backend import (
     export_skinned_fbx,
     render_skeleton_overlay,
 )
+from .bannerlord_handoff import write_bannerlord_handoff
 from .config import BONE_REGION_PATTERNS, PRESETS, default_output_root
 from .game_install import inspect_game_install
 from .mesh_io import export_lod_scene, export_mesh, load_mesh, mesh_stats
@@ -263,6 +264,15 @@ def run_pipeline(
                 f"A {preview_kind.replace('_', ' ')} overlay was generated. It reveals scale/orientation/bone placement, but does not by itself prove deformation quality.",
             )
         )
+    handoff_path = write_bannerlord_handoff(
+        job_dir,
+        asset_name,
+        preset,
+        artifacts,
+        rigging,
+        len(lods),
+    )
+    artifacts["bannerlord_import_manifest"] = handoff_path
     result = PipelineResult(
         source=source,
         preset_key=preset.key,

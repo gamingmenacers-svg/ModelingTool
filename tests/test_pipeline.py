@@ -49,3 +49,8 @@ def test_weapon_pipeline_emits_rigid_setup(tmp_path: Path) -> None:
     )
     assert result.rigging.status == "rigid_asset_no_skinning"
     assert result.artifacts["rigging_metadata"].name == "weapon_setup.json"
+    assert result.artifacts["bannerlord_import_manifest"].is_file()
+    handoff = json.loads(result.artifacts["bannerlord_import_manifest"].read_text(encoding="utf-8"))
+    assert handoff["status"] == "modding_kit_import_required"
+    assert handoff["material"]["packed_specular_channels"]["green"] == "glossiness (1 - roughness)"
+    assert handoff["truth"]["tpac_compiled"] is False

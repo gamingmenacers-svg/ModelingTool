@@ -45,6 +45,8 @@ To rebuild the executable after changing the source code:
 
 The right-hand studio tabs expose the triangle budget, optional armour reference-weight manifest, bone heatmaps, model statistics, and production validation gates without leaving the fitting viewport.
 
+The **Inspect** tab also provides **Auto-fit to Bannerlord rig**. It evaluates right-handed PCA orientation candidates, resolves likely upside-down placement from the silhouette, uniformly normalizes deforming armour to the chosen equipment-slot envelope, and places it on the exact local rest rig. Single pauldrons, gloves/bracers, boots/greaves can be assigned left or right. Rigid weapons and shields are centred without silently changing their physical size. The operation stores one reversible transform and never changes the source mesh.
+
 ## Rigging Studio
 
 The centre of the app is a hardware-accelerated OpenGL fitting viewport, with assets and workflow on the left and Bannerlord-specific rig, inspection, and validation panels on the right. FBX files are converted read-only through the installed Blender bridge as soon as they are selected and are displayed automatically when conversion completes:
@@ -83,6 +85,7 @@ OBJ, GLB/GLTF, PLY, and STL can be inspected, cleaned, simplified, previewed, va
 - a prepared GLB and OBJ;
 - decreasing `.lod1`, `.lod2`, and `.lod3` OBJ meshes when possible;
 - a GLB review scene containing the named LODs;
+- a `bannerlord_import_manifest.json` containing the exact remaining material, skeleton, cloth, LOD, module-folder, Resource Browser, publish, and in-game-test gates;
 - before/after preview PNGs;
 - `validation_report.md` and `validation_report.json`;
 - armour weights when a valid weighted-reference manifest is supplied;

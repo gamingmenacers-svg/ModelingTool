@@ -38,6 +38,31 @@ def validate_mesh(
         items.append(_item("materials", "info", "Materials", f"{stats.material_count} materials were detected. Bannerlord will split polygons into submeshes because each mesh uses one material."))
     items.append(
         _item(
+            "pbr_material",
+            "warning",
+            "Bannerlord PBR material",
+            "Create a pbr_metallic material in the Resource Browser. Pack metallic into specular R, glossiness (1 - roughness) into G, and ambient occlusion into B.",
+        )
+    )
+    if preset.rig_mode != "rigid":
+        items.append(
+            _item(
+                "skinning_material_flag",
+                "warning",
+                "Material skinning flag",
+                "Enable Bump Map and Skinning in the material vertex layout. Use Skinning Precise only when important small polygons justify its extra cost.",
+            )
+        )
+    items.append(
+        _item(
+            "texture_naming",
+            "info",
+            "Texture compilation hints",
+            "Use the documented _d, _n, _s, and _h suffixes so the editor can infer albedo, normal, packed specular, and height-map compilation settings.",
+        )
+    )
+    items.append(
+        _item(
             "transforms",
             "info",
             "Scene transforms",
@@ -50,6 +75,17 @@ def validate_mesh(
         items.append(_item("scale", "pass", "Approximate scale", f"Largest dimension is {height:.3f}; it is plausible for the {preset.label.lower()} preset if units are metres."))
     else:
         items.append(_item("scale", "warning", "Scale needs confirmation", f"Largest dimension is {height:.3f}. Expected roughly {low:.2f}–{high:.2f} metres for this preset; confirm units and orientation."))
+    if preset.key == "body" and stats.dimensions[2] > 1e-8:
+        horizontal_over_vertical = float(stats.dimensions[0] / stats.dimensions[2])
+        if horizontal_over_vertical < 0.48:
+            items.append(
+                _item(
+                    "bind_pose_span",
+                    "warning",
+                    "Rest-pose arm span",
+                    "This body asset is narrow relative to its height. If it contains sleeves or arms authored down in an A/relaxed pose, deform it to the exact Bannerlord rest pose before transferring weights; centring alone is not a valid bind.",
+                )
+            )
     if preset.key == "weapon":
         diagonal = max(float(np.linalg.norm(stats.dimensions)), 1e-9)
         offset = float(np.linalg.norm(stats.bounds_center))
@@ -76,7 +112,7 @@ def validate_mesh(
         if preset.rig_mode == "rigid"
         else "The staged GLB/OBJ files are review intermediates. A skinned FBX and Bannerlord Modding Kit import are still required for in-game use."
     )
-    items.append(_item("export", "warning", "Bannerlord import step required", export_detail))
+    items.append(_item("export", "warning", "Bannerlord import and publish required", export_detail + " Forge does not mark an asset game-ready until Resource Browser import, module publish, and an in-game test pass."))
     return items
 
 

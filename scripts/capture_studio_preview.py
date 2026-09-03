@@ -50,8 +50,11 @@ def main() -> int:
     window._refresh_scene_list()
     window._log(f"FBX displayed with {bone_count} exact bones from the installed Bannerlord rest rig.")
     if len(asset.parts) > 1:
-        selected_row = min(3, len(asset.parts) - 1)
+        requested_row = int(os.environ.get("BMF_CAPTURE_ROW", "3"))
+        selected_row = min(max(0, requested_row), len(asset.parts) - 1)
         window._select_part_from_viewport(selected_row)
+        if os.environ.get("BMF_CAPTURE_AUTOFIT") == "1":
+            window._auto_fit_selected_part()
         window._frame_selected_part()
         if os.environ.get("BMF_CAPTURE_ISOLATE") == "1":
             for index in range(len(asset.parts)):

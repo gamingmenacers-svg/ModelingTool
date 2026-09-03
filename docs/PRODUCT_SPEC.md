@@ -1,5 +1,7 @@
 # Bannerlord Model Forge — product and technical specification
 
+This document describes the validated first vertical slice. The researched end-to-end product target and delivery sequence live in [FULL_SUITE_ROADMAP.md](FULL_SUITE_ROADMAP.md).
+
 ## Product promise
 
 Bannerlord Model Forge is a Windows desktop assistant for people who have a generated 3D armour, clothing, or weapon model but do not know Blender, retopology, rigging, or weight painting. It must turn an opaque art task into a guided pipeline with evidence, warnings, and a reversible manual exception path.

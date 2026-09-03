@@ -1,6 +1,6 @@
 # Bannerlord asset-pipeline research
 
-Research date: 2026-09-01.
+Research date: 2026-09-03.
 
 ## Local, read-only findings
 
@@ -35,7 +35,17 @@ The official [Meshes](https://moddocs.bannerlord.com/asset-management/asset-type
 
 The official [Material Editor](https://moddocs.bannerlord.com/editor/resource-editors/material_editor/) page requires the Skinning vertex-layout option for skinned meshes, describes the metallic PBR texture channels, and exposes recompute-tangent handling.
 
+The same Material Editor documentation says new content should normally use `pbr_metallic`; its packed Specular texture is R metallic, G glossiness (the inverse of roughness), B ambient occlusion, and A translucency for shaders that use it. Bump Map should normally be enabled, skinned meshes require Skinning, and Skinning Precise is a higher-cost option for important small polygons.
+
+The official [Model Viewer](https://moddocs.bannerlord.com/editor/resource-editors/model_viewer/) can place multiple human or mesh entities, choose skeleton and animation, blend animations, attach visuals to human parts, and save/load test scenes. Forge therefore needs an equivalent deformation lab rather than treating a static rest pose as proof.
+
+The official [Cloth Simulation](https://moddocs.bannerlord.com/editor/resource-editors/cloth_simulation/) page documents vertex alpha as the maximum movement radius, zero-alpha skinned anchors, mapped lower-poly simulation meshes for dense/layered/double-sided garments, preview skeleton/body/animation settings, and collision-body authoring.
+
+The official [Meta Mesh Editor](https://moddocs.bannerlord.com/editor/resource-editors/meta_mesh_editor/) exposes redundant-vertex removal, normal/tangent recomputation, material/submesh/LOD control, and ignored submeshes. These become explicit import-manifest settings and validation gates.
+
 The official [Adding and Overriding Assets](https://moddocs.bannerlord.com/asset-management/asset-types/overriding_assets/) page documents `Assets`, `AssetSources`, `AssetPackages`, `EmAssetPackages`, `DsAssetPackages`, and `RuntimeDataCache`; packed client assets are generated through the supported editor workflow.
+
+The official [Creating a Module guide](https://moddocs.bannerlord.com/asset-management/quickguide_create_a_mod/) requires `SubModule.xml`, places source content in `AssetSources`, derived development assets in `Assets`, gameplay XML in `ModuleData`, and published client assets in `AssetPackages`.
 
 The official [Asset Management](https://moddocs.bannerlord.com/asset-management/) FAQ says the Modding Kit must match the game version and be installed on the same drive. The Resource Browser/editor is therefore the final source of truth for import acceptance.
 

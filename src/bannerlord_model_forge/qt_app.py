@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .auto_fit import auto_fit_to_bannerlord
 from .blender_backend import detect_blender
 from .config import BONE_REGION_PATTERNS, PRESETS, project_root
 from .game_install import inspect_game_install
@@ -72,6 +73,7 @@ QLabel#Value { color: #f2f5f8; font-weight: 600; }
 QLabel#Accent { color: #62adff; font-weight: 650; }
 QLabel#Good { color: #6ed6a5; }
 QLabel#Warning { color: #f5bd68; }
+QLabel#Error { color: #ff7f86; font-weight: 650; }
 QPushButton, QToolButton {
     background: #1b2330; border: 1px solid #303b4d; border-radius: 6px;
     padding: 8px 12px; color: #dce3ec;
@@ -611,7 +613,7 @@ class ForgeStudio(QMainWindow):
         self.asset_list.addItem(placeholder)
         layout.addWidget(self.asset_list)
         edit_row = QHBoxLayout()
-        self.remove_part_button = QPushButton("Remove selected")
+        self.remove_part_button = QPushButton("Delete selected")
         self.remove_part_button.setObjectName("Quiet")
         self.remove_part_button.setEnabled(False)
         self.remove_part_button.setToolTip("Removes pieces only from this working scene. The original model is never changed.")
@@ -689,7 +691,7 @@ class ForgeStudio(QMainWindow):
             row.addWidget(button)
         row.addSpacing(8)
         self.frame_selection_button = QToolButton()
-        self.frame_selection_button.setText("Frame selected")
+        self.frame_selection_button.setText("Focus")
         self.frame_selection_button.setEnabled(False)
         self.frame_selection_button.setToolTip("Zoom the camera to the selected armour piece. Double-clicking an outliner item does the same.")
         self.frame_selection_button.clicked.connect(self._frame_selected_part)
@@ -813,6 +815,10 @@ class ForgeStudio(QMainWindow):
         self.method_status = QLabel("PROVISIONAL — pose review required")
         self.method_status.setObjectName("Warning")
         method_layout.addWidget(self.method_status)
+        self.auto_normalize_check = QCheckBox("Auto-fit untouched pieces before rigging")
+        self.auto_normalize_check.setChecked(True)
+        self.auto_normalize_check.setToolTip("If the selected piece still has its original transform, orient, scale, and place it on the chosen Bannerlord slot first.")
+        method_layout.addWidget(self.auto_normalize_check)
         layout.addWidget(card(method_layout))
 
         layout.addWidget(section_label("Higher-confidence reference"))
@@ -843,20 +849,27 @@ class ForgeStudio(QMainWindow):
         layout.addWidget(section_label("Selected piece orientation"))
         self.orientation_status = muted("Select one armour piece to rotate it.", True)
         layout.addWidget(self.orientation_status)
-        axis_row = QHBoxLayout()
+        self.placement_combo = QComboBox()
+        self.placement_combo.addItem("Placement: auto", "auto")
+        self.placement_combo.addItem("Placement: centre / pair", "centre")
+        self.placement_combo.addItem("Placement: left side", "left")
+        self.placement_combo.addItem("Placement: right side", "right")
+        self.placement_combo.setToolTip("Choose left or right for a single pauldron, glove, bracer, boot, or greave.")
+        self.auto_fit_button = QPushButton("Auto-fit to Bannerlord rig")
+        self.auto_fit_button.setToolTip("Uses the selected slot, exact local rest rig, PCA orientation, uniform scale, and a reversible placement transform.")
+        self.auto_fit_button.clicked.connect(self._auto_fit_selected_part)
+        layout.addWidget(self.placement_combo)
+        layout.addWidget(self.auto_fit_button)
         self.rotation_axis_combo = QComboBox()
         self.rotation_axis_combo.addItem("X axis", 0)
         self.rotation_axis_combo.addItem("Y axis", 1)
         self.rotation_axis_combo.addItem("Z axis", 2)
         self.rotation_axis_combo.setToolTip("Rotation uses the imported model's own axes and is preserved for Auto-rig/export.")
-        axis_row.addWidget(self.rotation_axis_combo, 1)
         self.rotate_minus_button = QPushButton("−90°")
         self.rotate_plus_button = QPushButton("+90°")
         self.rotate_minus_button.clicked.connect(lambda: self._rotate_selected_part(-90.0))
         self.rotate_plus_button.clicked.connect(lambda: self._rotate_selected_part(90.0))
-        axis_row.addWidget(self.rotate_minus_button)
-        axis_row.addWidget(self.rotate_plus_button)
-        layout.addLayout(axis_row)
+        layout.addWidget(self.rotation_axis_combo)
         rotation_row = QHBoxLayout()
         self.rotate_180_button = QPushButton("Rotate 180°")
         self.rotate_180_button.setToolTip("Turns the selected piece over around the chosen axis.")
@@ -864,9 +877,11 @@ class ForgeStudio(QMainWindow):
         self.reset_transform_button = QPushButton("Reset orientation")
         self.reset_transform_button.setObjectName("Quiet")
         self.reset_transform_button.clicked.connect(self._reset_selected_transform)
+        rotation_row.addWidget(self.rotate_minus_button, 1)
+        rotation_row.addWidget(self.rotate_plus_button, 1)
         rotation_row.addWidget(self.rotate_180_button, 1)
-        rotation_row.addWidget(self.reset_transform_button, 1)
         layout.addLayout(rotation_row)
+        layout.addWidget(self.reset_transform_button)
         self._set_transform_controls_enabled(False)
         layout.addSpacing(8)
         layout.addWidget(section_label("Material preview"))
@@ -922,14 +937,17 @@ class ForgeStudio(QMainWindow):
 
     def _validate_tab(self) -> QWidget:
         scroll, layout = self._scroll_tab()
-        layout.addWidget(section_label("Production gates"))
-        self.validation_list = QVBoxLayout()
+        layout.addWidget(section_label("Game-ready gates"))
+        self.validation_summary = muted("Run Auto-rig to replace this checklist with evidence from the selected piece.", True)
+        layout.addWidget(self.validation_summary)
+        self.validation_cards = QVBoxLayout()
         for title, detail in (
             ("Skeleton alignment", "Model must sit correctly on the Bannerlord bind pose."),
             ("Influence limits", "No more than four normalized weights per vertex."),
             ("Deformation poses", "Shoulders, waist, riding and crouch need visual review."),
-            ("Clipping", "Inspect the equipped body and adjacent armour slots."),
-            ("Modding Kit import", "Final materials, tangents and skinning require editor validation."),
+            ("PBR material", "Convert roughness to glossiness and pack metallic/gloss/AO for pbr_metallic."),
+            ("Clipping and cloth", "Inspect the equipped body, adjacent slots, collision capsules, and cloth anchors."),
+            ("Modding Kit publish", "Resource Browser import, AssetPackages publish, and an in-game test are mandatory."),
         ):
             box_layout = QVBoxLayout()
             box_layout.setContentsMargins(11, 9, 11, 9)
@@ -938,7 +956,8 @@ class ForgeStudio(QMainWindow):
             box_layout.addWidget(heading)
             box_layout.addWidget(muted(detail, True))
             widget = card(box_layout)
-            layout.addWidget(widget)
+            self.validation_cards.addWidget(widget)
+        layout.addLayout(self.validation_cards)
         layout.addStretch(1)
         return scroll
 
@@ -1122,6 +1141,8 @@ class ForgeStudio(QMainWindow):
 
     def _set_transform_controls_enabled(self, enabled: bool) -> None:
         for control in (
+            self.placement_combo,
+            self.auto_fit_button,
             self.rotation_axis_combo,
             self.rotate_minus_button,
             self.rotate_plus_button,
@@ -1129,6 +1150,53 @@ class ForgeStudio(QMainWindow):
             self.reset_transform_button,
         ):
             control.setEnabled(enabled)
+
+    def _auto_fit_selected_part(self) -> bool:
+        if (
+            self.source_asset is None
+            or self.preview_asset is not self.source_asset
+            or self.skeleton_data_path is None
+        ):
+            QMessageBox.information(
+                self,
+                "Bannerlord rig not ready",
+                "Wait for the official local Bannerlord skeleton to load, then select one piece.",
+            )
+            return False
+        indices = self._selected_part_indices()
+        if len(indices) != 1:
+            return False
+        index = indices[0]
+        part = self.source_asset.parts[index]
+        placement = str(self.placement_combo.currentData())
+        if placement == "auto":
+            lowered = part.name.lower()
+            if re.search(r"(^|[_.\s-])(left|l)([_.\s-]|$)", lowered):
+                placement = "left"
+            elif re.search(r"(^|[_.\s-])(right|r)([_.\s-]|$)", lowered):
+                placement = "right"
+        try:
+            result = auto_fit_to_bannerlord(
+                part.mesh,
+                self.skeleton_data_path,
+                str(self.piece_combo.currentData()),
+                placement,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Auto-fit stopped", str(exc))
+            return False
+        part.transform = result.transform
+        self.viewport.set_part_transform(index, part.transform)
+        self.viewport.set_view(0.0, 0.0)
+        self.viewport.frame_selected_part(index)
+        self.orientation_status.setText(
+            f"{part.name} • auto-fit {result.confidence:.0%} • scale ×{result.scale:.4g}"
+        )
+        self._log(
+            f"Auto-fit {part.name} to {self.piece_combo.currentText()} ({result.placement}); "
+            f"confidence {result.confidence:.0%}, uniform scale ×{result.scale:.4g}. {result.note}"
+        )
+        return True
 
     def _rotate_selected_part(self, degrees: float) -> None:
         if self.source_asset is None or self.preview_asset is not self.source_asset:
@@ -1293,6 +1361,18 @@ class ForgeStudio(QMainWindow):
             QMessageBox.information(self, "Piece removed", "Restore that piece before auto-rigging it.")
             return
         selected_part = self.source_asset.parts[selected_index]
+        if self.auto_normalize_check.isChecked() and np.allclose(
+            selected_part.transform, np.eye(4), rtol=0.0, atol=1e-12
+        ):
+            if self.skeleton_data_path is None:
+                QMessageBox.information(
+                    self,
+                    "Wait for the Bannerlord rig",
+                    "Automatic normalization needs the official local rest rig. Wait for it to finish loading, or turn off automatic fit and place the piece manually.",
+                )
+                return
+            if not self._auto_fit_selected_part():
+                return
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", selected_part.name).strip("_.") or f"piece_{selected_index + 1:02d}"
         selected_source = project_root() / "work" / "selections" / f"{self.source_path.stem}-{safe_name}.glb"
         prepared_selection = selected_part.transformed_mesh()
@@ -1346,16 +1426,61 @@ class ForgeStudio(QMainWindow):
         self.open_button.setEnabled(True)
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
-        self.job_label.setText("REVIEW REQUIRED")
-        for label in self.workflow_labels[2:]:
-            label.setStyleSheet("color:#6ed6a5;")
+        errors = sum(item.level == "error" for item in result.validation)
+        warnings = sum(item.level == "warning" for item in result.validation)
+        self.job_label.setText("BLOCKED" if errors else "REVIEW REQUIRED")
         self.workflow_labels[2].setText("Optimize geometry  •  complete")
-        self.workflow_labels[3].setText("Bind skeleton  •  complete")
-        self.workflow_labels[4].setText("Validate poses  •  review")
-        self.workflow_labels[5].setText("Export package  •  ready")
+        self.workflow_labels[2].setStyleSheet("color:#6ed6a5;")
+        if result.rigging.status == "weights_transferred":
+            bind_state, bind_color = "reference weights", "#6ed6a5"
+        elif result.rigging.status == "provisional_auto_weights":
+            bind_state, bind_color = "provisional", "#f5bd68"
+        elif result.rigging.status in {"rigid_asset_no_skinning", "rigid_weights_generated"}:
+            bind_state, bind_color = "rigid item", "#6ed6a5"
+        else:
+            bind_state, bind_color = "blocked", "#ff7f86"
+        self.workflow_labels[3].setText(f"Bind skeleton  •  {bind_state}")
+        self.workflow_labels[3].setStyleSheet(f"color:{bind_color};")
+        self.workflow_labels[4].setText("Validate poses  •  required")
+        self.workflow_labels[4].setStyleSheet("color:#f5bd68;")
+        has_fbx = any(
+            key in result.artifacts
+            for key in ("bannerlord_skinned_fbx", "bannerlord_provisional_skinned_fbx", "bannerlord_fbx")
+        )
+        self.workflow_labels[5].setText(
+            "Export package  •  FBX staged" if has_fbx else "Export package  •  FBX missing"
+        )
+        self.workflow_labels[5].setStyleSheet("color:#f5bd68;")
+        self._show_validation_results(result.validation)
         self._log(f"Prepared {result.before.triangles:,} → {result.after.triangles:,} triangles")
         self._log(f"Rigging: {result.rigging.status} • {result.rigging.confidence:.0%} confidence")
+        self._log(f"Game-ready gates: {errors} errors • {warnings} warnings • Modding Kit import/publish still required")
         self._log(f"Output: {result.output_dir}")
+
+    def _show_validation_results(self, validation: list) -> None:
+        while self.validation_cards.count():
+            item = self.validation_cards.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        counts = {
+            level: sum(entry.level == level for entry in validation)
+            for level in ("pass", "warning", "error", "info")
+        }
+        self.validation_summary.setText(
+            f"{counts['pass']} passed  •  {counts['warning']} review  •  "
+            f"{counts['error']} blocked  •  {counts['info']} informational"
+        )
+        icon_for = {"pass": "✓", "warning": "△", "error": "×", "info": "i"}
+        object_for = {"pass": "Good", "warning": "Warning", "error": "Error", "info": "Accent"}
+        for entry in validation:
+            box_layout = QVBoxLayout()
+            box_layout.setContentsMargins(11, 9, 11, 9)
+            heading = QLabel(f"{icon_for.get(entry.level, '○')}  {entry.title}")
+            heading.setObjectName(object_for.get(entry.level, "Value"))
+            box_layout.addWidget(heading)
+            box_layout.addWidget(muted(entry.detail, True))
+            self.validation_cards.addWidget(card(box_layout))
 
     def _pipeline_failed(self, message: str) -> None:
         self.forge_button.setEnabled(True)
