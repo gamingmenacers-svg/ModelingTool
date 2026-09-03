@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -28,6 +28,16 @@ class MeshPart:
 
     name: str
     mesh: trimesh.Trimesh
+    # Non-destructive working transform. The imported mesh and its UV/material
+    # stay untouched until the selected piece is handed to the rigging pipeline.
+    transform: np.ndarray = field(default_factory=lambda: np.eye(4, dtype=float))
+
+    def transformed_mesh(self) -> trimesh.Trimesh:
+        result = self.mesh.copy()
+        matrix = np.asarray(self.transform, dtype=float)
+        if not np.allclose(matrix, np.eye(4), rtol=0.0, atol=1e-12):
+            result.apply_transform(matrix)
+        return result
 
 
 def _material_names(mesh: trimesh.Trimesh) -> list[str]:

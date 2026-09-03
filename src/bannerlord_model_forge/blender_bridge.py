@@ -11,6 +11,22 @@ import bpy
 from mathutils import Vector
 
 
+def image_alpha_is_opaque(image) -> bool:
+    """Cheaply confirm an FBX image's alpha is redundant before unlinking it."""
+    if image is None or int(getattr(image, "channels", 0)) < 4 or not image.has_data:
+        return True
+    width, height = (int(value) for value in image.size)
+    x_step = max(1, width // 64)
+    y_step = max(1, height // 64)
+    channels = int(image.channels)
+    pixels = image.pixels
+    for y in range(0, height, y_step):
+        for x in range(0, width, x_step):
+            if float(pixels[(y * width + x) * channels + 3]) < 0.999:
+                return False
+    return True
+
+
 def arguments() -> argparse.Namespace:
     args = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     parser = argparse.ArgumentParser()
@@ -108,6 +124,28 @@ def main() -> None:
         mesh_object.parent = armature
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.suffix.lower() == ".glb":
+        # FBX importers commonly connect the very same image twice: RGB to
+        # Base Color and its fully-opaque alpha channel to Alpha. Blender's
+        # glTF exporter warns that this ambiguous duplicate texture graph can
+        # select the wrong sampler/UV association. A fitting preview is opaque,
+        # so remove only redundant alpha-image links in this converted copy.
+        for material in bpy.data.materials:
+            if material.node_tree is None:
+                continue
+            for node in material.node_tree.nodes:
+                if node.bl_idname != "ShaderNodeBsdfPrincipled":
+                    continue
+                alpha_input = node.inputs.get("Alpha")
+                base_input = node.inputs.get("Base Color")
+                if alpha_input is None or base_input is None or not base_input.is_linked:
+                    continue
+                base_image = getattr(base_input.links[0].from_node, "image", None)
+                for link in list(alpha_input.links):
+                    alpha_image = getattr(link.from_node, "image", None)
+                    if alpha_image == base_image and image_alpha_is_opaque(alpha_image):
+                        material.node_tree.links.remove(link)
+                if not alpha_input.is_linked:
+                    alpha_input.default_value = 1.0
         bpy.ops.export_scene.gltf(filepath=str(output), export_format="GLB", export_animations=False)
     elif output.suffix.lower() == ".fbx":
         if opts.skeleton and opts.weights:

@@ -72,6 +72,7 @@ in float v_weight;
 in vec2 v_uv;
 
 uniform int u_mode;
+uniform int u_uv_flip;
 uniform sampler2D u_base_texture;
 uniform vec3 u_camera;
 
@@ -108,10 +109,20 @@ void main() {
     vec3 halfVector = normalize(keyDirection + V);
     float specular = pow(max(dot(N, halfVector), 0.0), 34.0);
 
-    bool textured = u_mode == 0 || u_mode == 4;
-    bool selected = u_mode == 4 || u_mode == 5;
+    bool textured = u_mode == 0 || u_mode == 4 || u_mode == 7 || u_mode == 8;
+    bool selected = u_mode == 4 || u_mode == 5 || u_mode == 8;
+    bool baseColorOnly = u_mode == 7 || u_mode == 8;
     bool heatmap = u_mode == 6;
-    vec3 base = textured ? pow(texture(u_base_texture, v_uv).rgb, vec3(2.2)) : v_color;
+    vec2 textureUv = v_uv;
+    if (u_uv_flip == 1 || u_uv_flip == 3) textureUv.x = 1.0 - textureUv.x;
+    if (u_uv_flip == 2 || u_uv_flip == 3) textureUv.y = 1.0 - textureUv.y;
+    vec3 textureSample = textured ? texture(u_base_texture, textureUv).rgb : v_color;
+    if (baseColorOnly) {
+        vec3 exactColor = selected ? mix(textureSample, vec3(0.08, 0.52, 1.0), 0.04) : textureSample;
+        fragColor = vec4(exactColor, 1.0);
+        return;
+    }
+    vec3 base = textured ? pow(textureSample, vec3(2.2)) : v_color;
     if (heatmap) {
         vec3 cold = vec3(0.025, 0.12, 0.34);
         vec3 hot = vec3(1.0, 0.21, 0.025);
@@ -120,10 +131,10 @@ void main() {
             ? mix(cold, hot, v_weight / 0.55)
             : mix(hot, peak, (v_weight - 0.55) / 0.45);
     }
-    vec3 light = vec3(0.82) + vec3(1.05, 1.00, 0.92) * key + vec3(0.24, 0.27, 0.31) * fill;
-    vec3 color = base * light + vec3(0.018, 0.021, 0.026) * rim + vec3(0.075) * specular;
+    vec3 light = vec3(0.09) + vec3(0.46, 0.44, 0.41) * key + vec3(0.09, 0.10, 0.12) * fill;
+    vec3 color = base * light + vec3(0.018, 0.022, 0.028) * rim + vec3(0.10) * specular;
     if (selected && !heatmap) {
-        color = mix(color, vec3(0.08, 0.52, 1.0), 0.075) + vec3(0.005, 0.028, 0.055);
+        color *= 1.035;
     }
     fragColor = vec4(linear_to_srgb(color), 1.0);
 }
@@ -240,6 +251,8 @@ class RigViewport(QOpenGLWidget):
         self.selected_bone = ""
         self.wireframe = False
         self.show_skeleton = True
+        self.material_lit = True
+        self.uv_flip_bits = 0
         self.compare_mode = False
         self.yaw = math.radians(22.0)
         self.pitch = math.radians(7.0)
@@ -265,6 +278,7 @@ class RigViewport(QOpenGLWidget):
         self._skeleton_interleaved = np.empty((0, 12), dtype=np.float32)
         self._part_ranges: list[tuple[int, int, int]] = []
         self._part_bounds: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._part_base_bounds: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._part_texture_slots: dict[int, int] = {}
         self._texture_images: dict[int, QImage] = {}
         self._gl_textures: dict[int, QOpenGLTexture] = {}
@@ -274,6 +288,7 @@ class RigViewport(QOpenGLWidget):
         self._normalization_scale = 1.0
         self._normalization_origin = np.zeros(3, dtype=float)
         self._axis_order = [0, 2, 1]
+        self._source_to_normalized = np.eye(4, dtype=float)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(900, 650)
@@ -341,6 +356,24 @@ class RigViewport(QOpenGLWidget):
 
     def set_selected_part(self, index: int) -> None:
         self.selected_part = index if 0 <= index < len(self.parts) and index not in self.hidden_parts else -1
+        self.update()
+
+    def set_material_lit(self, lit: bool) -> None:
+        """Switch between exact base-colour inspection and studio lighting."""
+        self.material_lit = bool(lit)
+        self.update()
+
+    def set_uv_flip(self, flip_u: bool, flip_v: bool) -> None:
+        """Correct texture-coordinate orientation without touching source UVs."""
+        self.uv_flip_bits = (1 if flip_u else 0) | (2 if flip_v else 0)
+        self.update()
+
+    def set_part_transform(self, index: int, matrix: np.ndarray) -> None:
+        """Apply a fast, non-destructive source-space transform to one piece."""
+        if not 0 <= index < len(self.parts):
+            return
+        self.parts[index].transform = np.asarray(matrix, dtype=float).reshape((4, 4)).copy()
+        self._refresh_part_bounds(index)
         self.update()
 
     def frame_selected_part(self, index: int | None = None) -> None:
@@ -420,6 +453,7 @@ class RigViewport(QOpenGLWidget):
         self._skeleton_interleaved = np.empty((0, 12), dtype=np.float32)
         self._part_ranges = []
         self._part_bounds = {}
+        self._part_base_bounds = {}
         self._part_texture_slots = {}
         self._texture_images = {}
         self._upload_if_ready()
@@ -548,6 +582,12 @@ class RigViewport(QOpenGLWidget):
         self._normalization_origin = np.asarray(((minimum[0] + maximum[0]) * 0.5, minimum[1], (minimum[2] + maximum[2]) * 0.5))
         height = max(float(maximum[1] - minimum[1]), 1e-6)
         self._normalization_scale = 2.0 / height
+        basis = np.zeros((3, 3), dtype=float)
+        for target_axis, source_axis in enumerate(self._axis_order):
+            basis[target_axis, source_axis] = self._normalization_scale
+        self._source_to_normalized = np.eye(4, dtype=float)
+        self._source_to_normalized[:3, :3] = basis
+        self._source_to_normalized[:3, 3] = -self._normalization_origin * self._normalization_scale
         framing_reference = np.vstack([value for value in (model_reference, skeleton_points) if len(value)])
         normalized_reference = (framing_reference[:, self._axis_order] - self._normalization_origin) * self._normalization_scale
         self._model_height = max(float(np.ptp(normalized_reference[:, 1])), 0.25)
@@ -557,6 +597,7 @@ class RigViewport(QOpenGLWidget):
         mesh_rows: list[np.ndarray] = []
         self._part_ranges = []
         self._part_bounds = {}
+        self._part_base_bounds = {}
         self._part_texture_slots = {}
         self._texture_images = {}
         texture_keys: dict[tuple[object, ...], int] = {}
@@ -569,10 +610,18 @@ class RigViewport(QOpenGLWidget):
             faces = np.asarray(mesh.faces, dtype=np.uint32)
             aligned = vertices[:, self._axis_order]
             positions = ((aligned - self._normalization_origin) * self._normalization_scale).astype(np.float32)
-            # Compute in the source coordinate system, then transform the
-            # normals. Computing the cross product after an axis reflection
-            # silently inverted every FBX normal and made textured metal black.
-            normals = _crease_aware_normals(vertices, np.asarray(mesh.faces, dtype=int))[:, self._axis_order]
+            # GLB previews carry Blender's authored split/smoothed normals.
+            # Prefer those exactly; recomputing them makes hard-surface armour
+            # look faceted and can turn a clean material into triangular noise.
+            cached = getattr(getattr(mesh, "_cache", None), "cache", {}).get("vertex_normals")
+            source_normals = (
+                np.asarray(cached, dtype=np.float64)
+                if cached is not None
+                else np.empty((0, 3), dtype=np.float64)
+            )
+            if len(source_normals) != len(vertices) or not np.isfinite(source_normals).all():
+                source_normals = _crease_aware_normals(vertices, np.asarray(mesh.faces, dtype=int))
+            normals = source_normals[:, self._axis_order]
             colors = _neutral_vertex_colors(mesh, len(vertices))
             weights = np.zeros((len(vertices), 1), dtype=np.float32)
             if len(self.parts) == 1 and self.selected_bone and len(self.weights) == len(vertices):
@@ -589,7 +638,9 @@ class RigViewport(QOpenGLWidget):
             count = len(expanded)
             self._part_ranges.append((part_index, cursor, count))
             cursor += count
-            self._part_bounds[part_index] = (positions.min(axis=0), positions.max(axis=0))
+            bounds = (positions.min(axis=0), positions.max(axis=0))
+            self._part_base_bounds[part_index] = bounds
+            self._part_bounds[part_index] = bounds
 
             image = _base_texture_image(mesh)
             if image is not None and source_uv is not None:
@@ -613,6 +664,8 @@ class RigViewport(QOpenGLWidget):
                     ).copy()
                 self._part_texture_slots[part_index] = slot
         self._mesh_interleaved = np.vstack(mesh_rows) if mesh_rows else np.empty((0, 12), dtype=np.float32)
+        for part_index in self._part_base_bounds:
+            self._refresh_part_bounds(part_index)
 
         skeleton_rows: list[np.ndarray] = []
         heads = {str(bone.get("name", "")): np.asarray(bone.get("head", [0.0, 0.0, 0.0]), dtype=float) for bone in self.skeleton}
@@ -671,7 +724,14 @@ class RigViewport(QOpenGLWidget):
         self._gl_textures = {}
         for slot, image in self._texture_images.items():
             # QImage rows start at the top; OpenGL UVs start at the bottom.
-            self._gl_textures[slot] = QOpenGLTexture(image.mirrored(False, True))
+            texture = QOpenGLTexture(image.mirrored(False, True))
+            # Some Windows drivers expose incomplete auto-generated mip levels
+            # for large embedded FBX atlases, producing triangle-shaped blotches.
+            # Linear sampling from the verified source image is stable and exact.
+            texture.setMinificationFilter(QOpenGLTexture.Filter.Linear)
+            texture.setMagnificationFilter(QOpenGLTexture.Filter.Linear)
+            texture.setWrapMode(QOpenGLTexture.WrapMode.Repeat)
+            self._gl_textures[slot] = texture
 
         assert self._skeleton_vao is not None and self._skeleton_vbo is not None
         if not self._skeleton_vao.isCreated():
@@ -696,8 +756,8 @@ class RigViewport(QOpenGLWidget):
         tile_size = 0.5
         tile_count = 72
         start = -tile_count * tile_size * 0.5
-        dark = (0.032, 0.044, 0.061)
-        light = (0.115, 0.139, 0.171)
+        dark = (0.014, 0.020, 0.029)
+        light = (0.050, 0.061, 0.077)
         for row in range(tile_count):
             z0, z1 = start + row * tile_size, start + (row + 1) * tile_size
             for column in range(tile_count):
@@ -734,6 +794,22 @@ class RigViewport(QOpenGLWidget):
             span = max(float(extent[0]), float(extent[1]), float(extent[2]), 0.08)
             distance = max(0.24, span * 2.35) / self.zoom
             target = QVector3D(float(center[0]), float(center[1]), float(center[2]))
+        elif self._part_bounds:
+            visible_bounds = [
+                bounds for index, bounds in self._part_bounds.items() if index not in self.hidden_parts
+            ]
+            if visible_bounds:
+                minimum = np.min(np.vstack([bounds[0] for bounds in visible_bounds]), axis=0)
+                maximum = np.max(np.vstack([bounds[1] for bounds in visible_bounds]), axis=0)
+                center = (minimum + maximum) * 0.5
+                extent = maximum - minimum
+                span = max(float(extent[0]), float(extent[1]), float(extent[2]), 0.20)
+                compare_span = self._comparison_spacing() * 5.0 if self.compare_mode else span
+                distance = max(0.55, compare_span * 1.12, span * 2.15) / self.zoom
+                target = QVector3D(float(center[0]), float(center[1]), float(center[2]))
+            else:
+                distance = 3.6 / self.zoom
+                target = QVector3D(0.0, self._model_height * 0.48, 0.0)
         else:
             compare_span = self._comparison_spacing() * 5.0 if self.compare_mode else max(self._model_width, 1.0)
             distance = max(3.6, compare_span * 1.05, self._model_height * 2.0) / self.zoom
@@ -764,7 +840,7 @@ class RigViewport(QOpenGLWidget):
         floor_model = QMatrix4x4()
         floor_model.translate(0.0, self._floor_height, 0.0)
         self._program.setUniformValue("u_model", floor_model)
-        self._program.setUniformValue("u_mode", 1)
+        self._program.setUniformValue(self._program.uniformLocation("u_mode"), 1)
         self._floor_vao.bind()
         self._gl.glDrawArrays(GL_TRIANGLES, 0, self._floor_vertex_count)
         self._floor_vao.release()
@@ -772,24 +848,29 @@ class RigViewport(QOpenGLWidget):
     def _draw_models(self) -> None:
         assert self._program is not None and self._model_vao is not None and self._gl is not None
         self._program.setUniformValue("u_base_texture", 0)
+        self._program.setUniformValue(self._program.uniformLocation("u_uv_flip"), int(self.uv_flip_bits))
         self._model_vao.bind()
         if self.wireframe:
             self._gl.glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
         for offset in self._model_offsets():
-            model = QMatrix4x4()
-            model.translate(offset, 0.002, 0.0)
-            self._program.setUniformValue("u_model", model)
             for part_index, start, count in self._part_ranges:
                 if part_index in self.hidden_parts:
                     continue
+                placement = QMatrix4x4()
+                placement.translate(offset, 0.002, 0.0)
+                model = placement * self._part_model_matrix(part_index)
+                self._program.setUniformValue("u_model", model)
                 texture = self._gl_textures.get(self._part_texture_slots.get(part_index, -1))
                 if self.selected_bone:
                     mode = 6
                 elif texture is not None:
-                    mode = 4 if part_index == self.selected_part else 0
+                    if self.material_lit:
+                        mode = 4 if part_index == self.selected_part else 0
+                    else:
+                        mode = 8 if part_index == self.selected_part else 7
                 else:
                     mode = 5 if part_index == self.selected_part else 3
-                self._program.setUniformValue("u_mode", mode)
+                self._program.setUniformValue(self._program.uniformLocation("u_mode"), int(mode))
                 if texture is not None:
                     texture.bind(0)
                 self._gl.glDrawArrays(GL_TRIANGLES, start, count)
@@ -799,9 +880,36 @@ class RigViewport(QOpenGLWidget):
             self._gl.glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
         self._model_vao.release()
 
+    def _part_view_matrix(self, index: int) -> np.ndarray:
+        if not 0 <= index < len(self.parts):
+            return np.eye(4, dtype=float)
+        source = np.asarray(self.parts[index].transform, dtype=float)
+        inverse = np.linalg.inv(self._source_to_normalized)
+        return self._source_to_normalized @ source @ inverse
+
+    def _part_model_matrix(self, index: int) -> QMatrix4x4:
+        return QMatrix4x4(self._part_view_matrix(index).reshape(-1).tolist())
+
+    def _refresh_part_bounds(self, index: int) -> None:
+        bounds = self._part_base_bounds.get(index)
+        if bounds is None:
+            return
+        minimum, maximum = bounds
+        corners = np.asarray(
+            [
+                (x, y, z, 1.0)
+                for x in (minimum[0], maximum[0])
+                for y in (minimum[1], maximum[1])
+                for z in (minimum[2], maximum[2])
+            ],
+            dtype=float,
+        )
+        transformed = (self._part_view_matrix(index) @ corners.T).T[:, :3]
+        self._part_bounds[index] = (transformed.min(axis=0), transformed.max(axis=0))
+
     def _draw_skeletons(self) -> None:
         assert self._program is not None and self._skeleton_vao is not None and self._gl is not None
-        self._program.setUniformValue("u_mode", 2)
+        self._program.setUniformValue(self._program.uniformLocation("u_mode"), 2)
         self._gl.glDisable(GL_DEPTH_TEST)
         self._gl.glLineWidth(3.0)
         self._skeleton_vao.bind()

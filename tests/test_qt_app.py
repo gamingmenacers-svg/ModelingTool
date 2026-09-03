@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 
+import numpy as np
 import trimesh
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -78,6 +79,46 @@ def test_scene_outliner_selects_removes_and_restores_individual_parts(tmp_path: 
         window._restore_all_parts()
         assert not window.removed_parts
         assert not window.viewport.hidden_parts
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_selected_piece_rotation_is_non_destructive_and_reaches_export_transform(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    window = ForgeStudio(load_official_skeleton=False)
+    source = tmp_path / "upside-down-set.glb"
+    source.write_bytes(b"source remains untouched")
+    mesh = trimesh.creation.box(extents=(1.0, 2.0, 3.0))
+    original_vertices = np.asarray(mesh.vertices).copy()
+    part = MeshPart("Greave", mesh)
+    asset = PreviewAsset(source.resolve(), source.resolve(), [part])
+    try:
+        window.source_path = source.resolve()
+        window.source_asset = asset
+        window.preview_asset = asset
+        window.viewport.set_parts(asset.parts)
+        window._refresh_scene_list()
+        window.asset_list.item(0).setSelected(True)
+        window.rotation_axis_combo.setCurrentIndex(0)
+
+        window._rotate_selected_part(180.0)
+
+        assert not np.allclose(part.transform, np.eye(4))
+        assert np.allclose(part.mesh.vertices, original_vertices)
+        assert np.allclose(part.transformed_mesh().centroid, part.mesh.centroid)
+        assert "rotated 180" in window.orientation_status.text()
+
+        window._reset_selected_transform()
+        assert np.allclose(part.transform, np.eye(4))
+        assert source.read_bytes() == b"source remains untouched"
+
+        window.material_preview_combo.setCurrentIndex(1)
+        assert window.viewport.material_lit is False
+        window.material_preview_combo.setCurrentIndex(0)
+        assert window.viewport.material_lit is True
+        window.texture_flip_v_check.setChecked(True)
+        assert window.viewport.uv_flip_bits == 2
     finally:
         window.close()
         app.processEvents()

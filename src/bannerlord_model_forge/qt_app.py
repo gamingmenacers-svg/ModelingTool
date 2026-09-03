@@ -750,11 +750,11 @@ class ForgeStudio(QMainWindow):
         panel.setMaximumWidth(390)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        tabs = QTabWidget()
-        tabs.addTab(self._rig_tab(), "Rig setup")
-        tabs.addTab(self._inspect_tab(), "Inspect")
-        tabs.addTab(self._validate_tab(), "Validate")
-        layout.addWidget(tabs, 1)
+        self.inspector_tabs = QTabWidget()
+        self.inspector_tabs.addTab(self._rig_tab(), "Rig setup")
+        self.inspector_tabs.addTab(self._inspect_tab(), "Inspect")
+        self.inspector_tabs.addTab(self._validate_tab(), "Validate")
+        layout.addWidget(self.inspector_tabs, 1)
         action = QFrame()
         action.setStyleSheet("background:#10151d;border-top:1px solid #252d3a;")
         action_layout = QVBoxLayout(action)
@@ -840,6 +840,51 @@ class ForgeStudio(QMainWindow):
 
     def _inspect_tab(self) -> QWidget:
         scroll, layout = self._scroll_tab()
+        layout.addWidget(section_label("Selected piece orientation"))
+        self.orientation_status = muted("Select one armour piece to rotate it.", True)
+        layout.addWidget(self.orientation_status)
+        axis_row = QHBoxLayout()
+        self.rotation_axis_combo = QComboBox()
+        self.rotation_axis_combo.addItem("X axis", 0)
+        self.rotation_axis_combo.addItem("Y axis", 1)
+        self.rotation_axis_combo.addItem("Z axis", 2)
+        self.rotation_axis_combo.setToolTip("Rotation uses the imported model's own axes and is preserved for Auto-rig/export.")
+        axis_row.addWidget(self.rotation_axis_combo, 1)
+        self.rotate_minus_button = QPushButton("−90°")
+        self.rotate_plus_button = QPushButton("+90°")
+        self.rotate_minus_button.clicked.connect(lambda: self._rotate_selected_part(-90.0))
+        self.rotate_plus_button.clicked.connect(lambda: self._rotate_selected_part(90.0))
+        axis_row.addWidget(self.rotate_minus_button)
+        axis_row.addWidget(self.rotate_plus_button)
+        layout.addLayout(axis_row)
+        rotation_row = QHBoxLayout()
+        self.rotate_180_button = QPushButton("Rotate 180°")
+        self.rotate_180_button.setToolTip("Turns the selected piece over around the chosen axis.")
+        self.rotate_180_button.clicked.connect(lambda: self._rotate_selected_part(180.0))
+        self.reset_transform_button = QPushButton("Reset orientation")
+        self.reset_transform_button.setObjectName("Quiet")
+        self.reset_transform_button.clicked.connect(self._reset_selected_transform)
+        rotation_row.addWidget(self.rotate_180_button, 1)
+        rotation_row.addWidget(self.reset_transform_button, 1)
+        layout.addLayout(rotation_row)
+        self._set_transform_controls_enabled(False)
+        layout.addSpacing(8)
+        layout.addWidget(section_label("Material preview"))
+        self.material_preview_combo = QComboBox()
+        self.material_preview_combo.addItem("Studio material — recommended", "studio_lit")
+        self.material_preview_combo.addItem("Base colour — source image", "base_color")
+        self.material_preview_combo.setToolTip("Base colour shows the embedded image without fake lighting. Studio lighting adds viewport shading.")
+        self.material_preview_combo.currentIndexChanged.connect(self._material_preview_changed)
+        layout.addWidget(self.material_preview_combo)
+        self.texture_flip_u_check = QCheckBox("Flip texture horizontally (U)")
+        self.texture_flip_v_check = QCheckBox("Flip texture vertically (V)")
+        self.texture_flip_u_check.setToolTip("Corrects exporters that store the texture direction differently. Source UVs remain untouched.")
+        self.texture_flip_v_check.setToolTip("Corrects exporters that store the texture direction differently. Source UVs remain untouched.")
+        self.texture_flip_u_check.toggled.connect(self._texture_orientation_changed)
+        self.texture_flip_v_check.toggled.connect(self._texture_orientation_changed)
+        layout.addWidget(self.texture_flip_u_check)
+        layout.addWidget(self.texture_flip_v_check)
+        layout.addSpacing(8)
         layout.addWidget(section_label("Viewport overlays"))
         self.skeleton_check = QCheckBox("Show Bannerlord skeleton")
         self.skeleton_check.setChecked(True)
@@ -1061,11 +1106,69 @@ class ForgeStudio(QMainWindow):
         self.remove_part_button.setEnabled(editable and bool(indices))
         self.frame_selection_button.setEnabled(len(indices) == 1)
         self.solo_part_button.setEnabled(editable and len(indices) == 1)
+        self._set_transform_controls_enabled(editable and len(indices) == 1)
         if len(indices) == 1 and self.preview_asset is not None:
             name = self.preview_asset.parts[indices[0]].name
             self.forge_button.setText(f"Auto-rig selected • {name[:22]}")
+            if editable:
+                self.inspector_tabs.setCurrentIndex(1)
+            changed = not np.allclose(self.preview_asset.parts[indices[0]].transform, np.eye(4), rtol=0.0, atol=1e-12)
+            self.orientation_status.setText(
+                f"{name} • {'orientation modified' if changed else 'imported orientation'}"
+            )
         else:
             self.forge_button.setText("Auto-rig selected piece")
+            self.orientation_status.setText("Select one armour piece to rotate it.")
+
+    def _set_transform_controls_enabled(self, enabled: bool) -> None:
+        for control in (
+            self.rotation_axis_combo,
+            self.rotate_minus_button,
+            self.rotate_plus_button,
+            self.rotate_180_button,
+            self.reset_transform_button,
+        ):
+            control.setEnabled(enabled)
+
+    def _rotate_selected_part(self, degrees: float) -> None:
+        if self.source_asset is None or self.preview_asset is not self.source_asset:
+            return
+        indices = self._selected_part_indices()
+        if len(indices) != 1:
+            return
+        index = indices[0]
+        part = self.source_asset.parts[index]
+        axis = int(self.rotation_axis_combo.currentData())
+        angle = np.deg2rad(degrees)
+        cosine, sine = float(np.cos(angle)), float(np.sin(angle))
+        rotation = np.eye(3, dtype=float)
+        first, second = ((1, 2), (0, 2), (0, 1))[axis]
+        rotation[first, first] = cosine
+        rotation[second, second] = cosine
+        rotation[first, second] = -sine if axis != 1 else sine
+        rotation[second, first] = sine if axis != 1 else -sine
+        center = np.asarray(part.mesh.bounds, dtype=float).mean(axis=0)
+        delta = np.eye(4, dtype=float)
+        delta[:3, :3] = rotation
+        delta[:3, 3] = center - rotation @ center
+        part.transform = delta @ np.asarray(part.transform, dtype=float)
+        self.viewport.set_part_transform(index, part.transform)
+        axis_name = "XYZ"[axis]
+        self.orientation_status.setText(f"{part.name} • rotated {degrees:g}° around {axis_name}")
+        self._log(f"Rotated {part.name} {degrees:g}° around its {axis_name} axis. Auto-rig/export will use this orientation.")
+
+    def _reset_selected_transform(self) -> None:
+        if self.source_asset is None or self.preview_asset is not self.source_asset:
+            return
+        indices = self._selected_part_indices()
+        if len(indices) != 1:
+            return
+        index = indices[0]
+        part = self.source_asset.parts[index]
+        part.transform = np.eye(4, dtype=float)
+        self.viewport.set_part_transform(index, part.transform)
+        self.orientation_status.setText(f"{part.name} • imported orientation")
+        self._log(f"Reset {part.name} to its imported orientation.")
 
     def _frame_selected_part(self) -> None:
         indices = self._selected_part_indices()
@@ -1192,14 +1295,16 @@ class ForgeStudio(QMainWindow):
         selected_part = self.source_asset.parts[selected_index]
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", selected_part.name).strip("_.") or f"piece_{selected_index + 1:02d}"
         selected_source = project_root() / "work" / "selections" / f"{self.source_path.stem}-{safe_name}.glb"
-        export_mesh(selected_part.mesh, selected_source)
+        prepared_selection = selected_part.transformed_mesh()
+        export_mesh(prepared_selection, selected_source)
         self.active_rig_part_name = selected_part.name
         reference = Path(self.reference_edit.text()).expanduser() if self.reference_edit.text().strip() else None
         self.forge_button.setEnabled(False)
         self.open_button.setEnabled(False)
         self.progress.setRange(0, 0)
         self.job_label.setText("ANALYZING & RIGGING")
-        self._log(f"Auto-rigging only: {selected_part.name} • {len(selected_part.mesh.faces):,} triangles. Other set pieces are excluded.")
+        orientation_note = " • corrected orientation applied" if not np.allclose(selected_part.transform, np.eye(4), rtol=0.0, atol=1e-12) else ""
+        self._log(f"Auto-rigging only: {selected_part.name} • {len(selected_part.mesh.faces):,} triangles{orientation_note}. Other set pieces are excluded.")
         for index in range(2, 5):
             self.workflow_labels[index].setStyleSheet("color:#62adff;")
         threading.Thread(
@@ -1294,6 +1399,12 @@ class ForgeStudio(QMainWindow):
     def _set_wireframe(self, checked: bool) -> None:
         self.viewport.wireframe = checked
         self.viewport.update()
+
+    def _material_preview_changed(self) -> None:
+        self.viewport.set_material_lit(self.material_preview_combo.currentData() == "studio_lit")
+
+    def _texture_orientation_changed(self) -> None:
+        self.viewport.set_uv_flip(self.texture_flip_u_check.isChecked(), self.texture_flip_v_check.isChecked())
 
     def _toggle_compare(self, checked: bool) -> None:
         self.mode_single.setChecked(not checked)

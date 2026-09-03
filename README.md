@@ -27,8 +27,9 @@ You need Windows, Python 3.11 or newer, and an internet connection for first-tim
 
 3. Drop a model into the workspace rail, or click **Open generated fit-test mesh** (clearly labelled test geometry, not a game character).
 4. Click an armour piece in the 3D viewport or its row in **Scene outliner**. Double-click the row (or use **Frame selected**) for a close view; **Solo selected** temporarily hides the rest of the set.
-5. Choose the equipment slot, then click **Auto-rig selected piece**. Only that piece is sent to the rigging pipeline.
-6. Click **Open result folder** and start with `validation_report.md`.
+5. The **Inspect** tab opens for the selected piece. Choose its X, Y, or Z axis and rotate it by −90°, +90°, or 180°; **Reset orientation** restores the import. The corrected working transform is carried into Auto-rig/export.
+6. Choose the equipment slot, then click **Auto-rig selected piece**. Only that piece is sent to the rigging pipeline.
+7. Click **Open result folder** and start with `validation_report.md`.
 
 For a multi-piece set, Ctrl-click rows to select unwanted objects and press Delete or **Remove selected**. This only hides them from the working scene; **Restore all** brings them back, and the imported FBX is never edited. After reviewing one rig result, use **Return to imported set** to select and process another piece.
 
@@ -51,7 +52,10 @@ The centre of the app is a hardware-accelerated OpenGL fitting viewport, with as
 - drag with the left mouse button to orbit;
 - click a disconnected mesh piece to select it, or select it by name in the Scene outliner;
 - double-click an outliner row or use **Frame selected** to inspect that piece closely;
+- use **Frame all** to recalculate the live bounds and centre every visible piece, including pieces you have rotated;
 - use **Solo selected** for an unobstructed material/shape check and **Show set** to return;
+- rotate the selected piece around its imported X/Y/Z axes in 90° steps or turn it over by 180°, without modifying the source file;
+- use the recommended studio material view, switch to the literal base-colour image for diagnosis, or flip U/V display orientation for an unusual exporter;
 - Ctrl-click several outliner rows and use **Remove selected** (or Delete) to discard unwanted working-scene pieces non-destructively;
 - use the mouse wheel to zoom;
 - switch between front, side, and three-quarter views;
@@ -62,7 +66,7 @@ The centre of the app is a hardware-accelerated OpenGL fitting viewport, with as
 
 On launch, the app uses Blender to read the locally installed `human_skeleton.fbx` and caches only its rest-pose joint data. The viewport displays the exact 31-bone Bannerlord hierarchy immediately, including the original `bip01_*` names and joint positions. Imported armour is normalized against that rig—not against a fake mannequin—so incorrect scale, origin, orientation, or bind-pose alignment is visible before auto-rigging. The source FBX stays in place and is never copied or modified.
 
-The FBX preview conversion separates disconnected geometry into named scene pieces while preserving object transforms, UVs, materials, and embedded images. The GPU material preview samples the original base-colour texture instead of flattening it into approximate vertex colours. Textured pieces that need triangle reduction are decimated through Blender so their UV material survives, and exported FBX files copy/embed available textures. The stage also uses smooth vertex normals, a depth buffer, multisample antialiasing, and a checker/matte floor. It does not redistribute TaleWorlds scene or character assets.
+The FBX preview conversion separates disconnected geometry into named scene pieces while preserving object transforms, UVs, materials, and embedded images. It also removes a redundant fully-opaque duplicate alpha link from the temporary Blender material graph when needed; this prevents the glTF exporter from assigning the wrong sampler while leaving the original FBX untouched. The GPU material preview samples the original base-colour texture instead of flattening it into approximate vertex colours. Textured pieces that need triangle reduction are decimated through Blender so their UV material survives, and exported FBX files copy/embed available textures. The stage also uses authored smooth vertex normals, a depth buffer, multisample antialiasing, and a checker/matte floor. It does not redistribute TaleWorlds scene or character assets.
 
 Rigging has three deliberately distinct confidence tiers:
 

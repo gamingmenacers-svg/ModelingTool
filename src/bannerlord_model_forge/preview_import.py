@@ -24,7 +24,7 @@ def load_preview_asset(source: Path, cache_root: Path) -> PreviewAsset:
     display_path = source
     if source.suffix.lower() == ".fbx":
         stat = source.stat()
-        identity = f"{source}|{stat.st_size}|{stat.st_mtime_ns}|split-loose-v2".encode("utf-8")
+        identity = f"{source}|{stat.st_size}|{stat.st_mtime_ns}|split-loose-v3-material".encode("utf-8")
         cache_key = hashlib.sha256(identity).hexdigest()[:16]
         display_path = cache_root.expanduser().resolve() / f"{source.stem}-{cache_key}.glb"
         if not display_path.is_file():
